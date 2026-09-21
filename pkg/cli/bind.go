@@ -140,6 +140,31 @@ func bindDefaultFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String(configkey.FSEndpoint, "127.0.0.1:9000", "")
 	cmd.PersistentFlags().String(configkey.FSAccessKey, "", "")
 	cmd.PersistentFlags().String(configkey.FSSecret, "", "")
+
+	// agent（大模型 Agent 交互 demo，实现见 agent/runtime）
+	cmd.PersistentFlags().String(configkey.LLMBaseUrl, "", "大模型服务地址（OpenAI 兼容端点）")
+	cmd.PersistentFlags().String(configkey.LLMApiKey, "", "大模型 API Key")
+	cmd.PersistentFlags().String(configkey.LLMModel, "", "大模型名称")
+	cmd.PersistentFlags().Int(configkey.LLMMaxTokens, 0, "单次生成最大 token 数，0 表示不限制")
+	cmd.PersistentFlags().String(configkey.LLMApiType, "openai-chat-completions", "接口协议类型：openai-chat-completions / anthropic-messages")
+
+	cmd.PersistentFlags().String(configkey.AgentSkillsDir, "", "skill 目录（每个子目录一个 skill，含 SKILL.md）")
+	cmd.PersistentFlags().Bool(configkey.AgentStream, true, "是否开启流式输出")
+	cmd.PersistentFlags().Int(configkey.AgentMaxIterations, 20, "单次运行内 model→tool 循环的最大轮数，0 表示框架默认")
+	cmd.PersistentFlags().String(configkey.AgentCheckpointDir, "", "CheckPointStore 本地目录，留空不启用 checkpoint")
+	cmd.PersistentFlags().String(configkey.AgentWorkspaceDir, "", "agent 工作区目录，留空取程序启动时的工作目录")
+	cmd.PersistentFlags().String(configkey.AgentSessionDir, "", "会话历史持久化目录，留空不持久化会话历史")
+
+	// ragflow 知识库检索
+	cmd.PersistentFlags().String(configkey.RagflowBaseUrl, "", "RAGFlow 服务地址，如 http://ragflow-host:9380")
+	cmd.PersistentFlags().String(configkey.RagflowApiKey, "", "RAGFlow API Key（Bearer 认证）")
+	cmd.PersistentFlags().String(configkey.RagflowDatasetIds, "", "要检索的知识库 dataset ID 列表，英文逗号分隔")
+	cmd.PersistentFlags().Int(configkey.RagflowPageSize, 5, "每次检索返回的 chunk 数量")
+	cmd.PersistentFlags().String(configkey.RagflowSimilarityThreshold, "0.2", "相似度阈值：低于该分数的 chunk 不返回")
+	cmd.PersistentFlags().String(configkey.RagflowVectorSimilarityWeight, "0.3", "向量相似度权重（0~1），剩余权重给关键词相似度")
+	cmd.PersistentFlags().Int(configkey.RagflowKnnTopK, 1024, "参与向量相似度计算的候选 chunk 数量")
+	cmd.PersistentFlags().Bool(configkey.RagflowKeyword, false, "是否启用关键词匹配")
+	cmd.PersistentFlags().Int(configkey.RagflowTimeoutSeconds, 30, "检索请求超时秒数")
 }
 
 func bind(cmd *cobra.Command) {
