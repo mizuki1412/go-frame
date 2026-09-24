@@ -16,6 +16,7 @@ import (
 	"github.com/example/go-frame/pkg/library/stringkit"
 	"github.com/example/go-frame/pkg/service/rediskit"
 	"github.com/example/go-frame/pkg/service/sqlkit"
+	"github.com/example/go-frame/pkg/service/tokenkit"
 )
 
 // Login 合并 loginByUsername 和 login，返回用户。
@@ -135,6 +136,8 @@ func UpdateUserInfo(uid int64, params UpdateUserInfoParams) {
 	}
 	u.UpdateDt.Set(time.Now())
 	dao.UpdateObj(u)
+	// 自助修改可携带 extend（含 privilegeExclude），鉴权结果随之变化
+	tokenkit.InvalidatePrincipal(uidOf(uid))
 }
 
 type ListUsersParams struct {
@@ -309,6 +312,8 @@ func UpdateUser(params UpdateUserParams) {
 			userroledao.New(userroledao.OptsNone, targetDS).ReplaceForUser(u.Id, params.Roles.Array)
 		}
 	})
+	// 角色/部门/权限剔除项任一变化都会改变鉴权结果，立即失效缓存而非等 1 分钟自然过期
+	tokenkit.InvalidatePrincipal(uidOf(u.Id))
 }
 
 type DeleteUserParams struct {
@@ -352,4 +357,7 @@ func DeleteUser(operatorUid int64, params DeleteUserParams) {
 			panic(exception.New("无效的操作类型"))
 		}
 	})
+	// 冻结/删除后继续持有的会话已无意义（尤其是删除），一并失效缓存并剔出在线会话
+	tokenkit.InvalidatePrincipal(uidOf(params.Id))
+	tokenkit.DestroyByUser(uidOf(params.Id))
 }

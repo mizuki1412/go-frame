@@ -124,6 +124,24 @@ func (dao Dao) FindByNo(no string) *model.Department {
 	return dao.Select().Where("no=?", no).One()
 }
 
+// ListSubtreeIds 返回 rootId 自身及其所有子孙部门的 id（含 rootId）。
+//
+// 用于把「本部门及以下」的数据范围展开成可下推到 dao 的部门 id 列表：
+// 部门树层级不定，递归 CTE 一次查完，避免逐层 ListByParent 造成 N+1。
+// B22: rootId 参数化，不做字符串拼接。
+func (dao Dao) ListSubtreeIds(rootId int64) []int64 {
+	cteBody := fmt.Sprintf(`select ? as id union all select d.id from %s d, t where t.id=d.parent`, dao.Table())
+	list := dao.Select().Columns("id").
+		WithRecursiveRaw("t", []string{"id"}, cteBody, rootId).
+		Where("id in (select id from t)").
+		OrderBy("id").List()
+	ids := make([]int64, 0, len(list))
+	for _, d := range list {
+		ids = append(ids, d.Id)
+	}
+	return ids
+}
+
 // IsDescendant B15: 检查 descendantId 是否是 ancestorId 的后代（含自身）。
 // 用于修改 parent 时防止成环：若 newParentId 是 deptId 的后代，则不能设为 parent。
 func (dao Dao) IsDescendant(ancestorId, descendantId int64) bool {

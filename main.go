@@ -11,6 +11,8 @@ func main() {
 	cli.RootCMD(&cobra.Command{
 		Use: "main",
 		Run: func(cmd *cobra.Command, args []string) {
+			// 权限数据源必须先于路由挂载注册，否则鉴权链路拿不到用户角色/部门
+			user.Init()
 			restkit.AddActions(user.All()...)
 			_ = restkit.Run()
 		},

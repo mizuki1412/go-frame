@@ -1,13 +1,20 @@
 package user
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/example/go-frame/mod/user/model"
 	"github.com/example/go-frame/mod/user/service"
 	"github.com/example/go-frame/pkg/class"
 	"github.com/example/go-frame/pkg/class/exception"
-	"github.com/example/go-frame/pkg/service/jwtkit"
 	"github.com/example/go-frame/pkg/service/restkit/context"
+	"github.com/example/go-frame/pkg/service/tokenkit"
 )
+
+// ScopeApp 业务端 token 域。与管理端共用同一套会话存储，靠 scope 隔离，
+// 业务端 token 不能横向调用 /user/admin、/role、/department。
+const ScopeApp = "app"
 
 type loginByUsernameParam struct {
 	Username string `comment:"用户名" validate:"required"`
@@ -23,13 +30,7 @@ func LoginByUsername(ctx *context.Context) {
 	params := loginByUsernameParam{}
 	ctx.BindForm(&params)
 	user := service.Login(params.Username, "", params.Pwd)
-	claim := jwtkit.New(user.Id)
-	token := claim.Token()
-	ctx.SetJwtCookie(claim, token)
-	ret := ResLogin{
-		User:  user,
-		Token: token,
-	}
+	ret := issueToken(ctx, user)
 	if AdditionLoginFunc != nil {
 		AdditionLoginFunc(ctx, ret)
 	}
@@ -47,17 +48,19 @@ func Login(ctx *context.Context) {
 	params := loginParam{}
 	ctx.BindForm(&params)
 	user := service.Login(params.Username, params.Phone, params.Pwd)
-	claim := jwtkit.New(user.Id)
-	token := claim.Token()
-	ret := ResLogin{
-		User:  user,
-		Token: token,
-	}
-	ctx.SetJwtCookie(claim, token)
+	ret := issueToken(ctx, user)
 	if AdditionLoginFunc != nil {
 		AdditionLoginFunc(ctx, ret)
 	}
 	ctx.JsonSuccess(ret)
+}
+
+// issueToken 签发会话并写 cookie。
+// token 由服务端随机生成、不含载荷，注销与剔出都靠删服务端会话即时生效。
+func issueToken(ctx *context.Context, user *model.User) ResLogin {
+	token := tokenkit.Create(strconv.FormatInt(user.Id, 10), ctx.SessionOptions(ScopeApp)...)
+	ctx.SetTokenCookie(token, time.Now().Add(tokenkit.ExpireTtl()))
+	return ResLogin{User: user, Token: token}
 }
 
 var AdditionLoginFunc func(ctx *context.Context, ret ResLogin)
@@ -78,18 +81,17 @@ func Info(ctx *context.Context) {
 	ctx.BindForm(&params)
 	if !params.Id.Valid {
 		// 获取自己的
-		uid := ctx.GetJwt().IdInt64()
+		uid := ctx.GetUid()
 		user := service.GetUserById(uid)
 		if user == nil {
 			panic(exception.New("用户不存在"))
 		}
-		claim := jwtkit.New(user.Id)
-		token := claim.Token()
+		// 续期当前会话而非重新签发：token 不透明，重签会让同一浏览器堆积旧会话
+		ctx.RefreshToken()
 		ret := ResLogin{
 			User:  user,
-			Token: token,
+			Token: ctx.GetToken(),
 		}
-		ctx.SetJwtCookie(claim, token)
 		if AdditionUserExFunc != nil {
 			AdditionUserExFunc(ctx, user)
 		}
@@ -108,7 +110,7 @@ func Info(ctx *context.Context) {
 }
 
 func Logout(ctx *context.Context) {
-	ctx.DestroyJwt()
+	ctx.DestroyToken()
 	ctx.JsonSuccess()
 }
 
@@ -120,7 +122,7 @@ type updatePwdParam struct {
 func UpdatePwd(ctx *context.Context) {
 	params := updatePwdParam{}
 	ctx.BindForm(&params)
-	uid := ctx.GetJwt().IdInt64()
+	uid := ctx.GetUid()
 	service.UpdatePwd(uid, params.OldPwd, params.NewPwd)
 	ctx.JsonSuccess()
 }
@@ -130,7 +132,7 @@ type updateUserInfoParam = service.UpdateUserInfoParams
 func UpdateUserInfo(ctx *context.Context) {
 	params := updateUserInfoParam{}
 	ctx.BindForm(&params)
-	uid := ctx.GetJwt().IdInt64()
+	uid := ctx.GetUid()
 	service.UpdateUserInfo(uid, params)
 	ctx.JsonSuccess()
 }

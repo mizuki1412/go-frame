@@ -57,6 +57,8 @@ func UpdateRole(params UpdateRoleParams) {
 	}
 	role.UpdateDt.Set(time.Now())
 	dao.UpdateObj(role)
+	// 权限码变了，该角色下所有用户的鉴权结果都要立即跟着变
+	InvalidateRolePrincipals(role.Id)
 }
 
 type DeleteRoleParams struct {

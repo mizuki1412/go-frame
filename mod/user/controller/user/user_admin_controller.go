@@ -60,7 +60,7 @@ type DelParams = service.DeleteUserParams
 func DeleteUser(ctx *context.Context) {
 	params := DelParams{}
 	ctx.BindForm(&params)
-	operatorUid := ctx.GetJwt().IdInt64()
+	operatorUid := ctx.GetUid()
 	service.DeleteUser(operatorUid, params)
 	ctx.JsonSuccess()
 }

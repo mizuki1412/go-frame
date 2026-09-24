@@ -99,3 +99,24 @@ CREATE TABLE IF NOT EXISTS sys_user_role (
 );
 CREATE INDEX IF NOT EXISTS idx_user_role_roleid ON sys_user_role (roleid);
 COMMENT ON TABLE sys_user_role IS '用户-角色关联';
+
+-- =============================================================
+-- 种子数据
+-- =============================================================
+
+-- ---------- 权限码字典 ----------
+-- 与 mod/user/model/privilege.go 的权限码常量一一对应；
+-- middleware.AuthPerm 消费这些码，sys_role.privileges 授予这些码。
+INSERT INTO sys_privilege_constant (id, name, type, sort) VALUES
+  ('user:admin',        '用户管理',     'user',       10),
+  ('user:session',      '在线会话管理', 'user',       20),
+  ('role:manage',       '角色管理',     'role',       30),
+  ('department:manage', '部门管理',     'department', 40)
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, sort = EXCLUDED.sort;
+
+-- ---------- 内置超级管理员角色（id=0） ----------
+-- 权限码 '*' 表示通配一切（tokenkit.Principal.HasPrivilege 的匹配规则）。
+-- 持有者受保护：不允许经管理员接口改绑或删除（service 层已拦截）。
+INSERT INTO sys_role (id, name, description, privileges, immutable, extend)
+VALUES (0, '超级管理员', '内置角色，权限码 * 表示全部权限', ARRAY['*'], true, '{}'::jsonb)
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description;

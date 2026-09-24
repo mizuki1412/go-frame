@@ -9,7 +9,9 @@ import (
 
 func Init(router *router.Router) {
 	tag := "role:用户模块-角色管理"
-	r := router.Group("/role").Use(middleware.AuthJWT())
+	// 角色即权限的来源，角色管理必须收敛到 role:manage 权限之下，
+	// 否则任何登录用户都能给自己挂上通配权限码（PrivilegeModel 提权）。
+	r := router.Group("/role").Use(middleware.AuthPerm(model.PermRoleManage))
 	r.Get("/privilege/list", ListAllPrivileges).Api(openapi.Tag(tag), openapi.Summary("所有权限列表"),
 		openapi.Response([]*model.PrivilegeConstant{}))
 	r.Post("/list", ListRoles).Api(openapi.Tag(tag), openapi.Summary("role列表"),
