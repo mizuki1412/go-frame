@@ -13,7 +13,7 @@ func Init(router *router.Router) {
 	r.Get("/privilege/list", ListAllPrivileges).Api(openapi.Tag(tag), openapi.Summary("所有权限列表"),
 		openapi.Response([]*model.PrivilegeConstant{}))
 	r.Post("/list", ListRoles).Api(openapi.Tag(tag), openapi.Summary("role列表"),
-		openapi.ReqParam(listRolesParam{}), openapi.Response([]*model.Role{}))
+		openapi.Response([]*model.Role{}))
 	r.Post("/create", CreateRole).Api(openapi.Tag(tag), openapi.Summary("role新增"), openapi.ReqBody(createParams{}))
 	r.Post("/update", UpdateRole).Api(openapi.Tag(tag), openapi.Summary("role修改"), openapi.ReqBody(updateParams{}))
 	r.Get("/del", DeleteRole).Api(openapi.Tag(tag), openapi.Summary("role删除"), openapi.ReqParam(delParams{}))

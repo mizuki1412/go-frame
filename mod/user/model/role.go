@@ -2,19 +2,22 @@ package model
 
 import (
 	"database/sql/driver"
+
 	"github.com/example/go-frame/pkg/class"
 	"github.com/spf13/cast"
 )
 
+// Role 角色表。角色为全局对象，不绑定部门——数据范围只由用户的 Department 决定。
 type Role struct {
 	Id          int64           `json:"id" db:"id" pk:"true" table:"sys_role" auto:"true"`
-	Department  *Department     `json:"department,omitempty" db:"department"`
 	Name        class.String    `json:"name,omitempty" db:"name"`
 	Description class.String    `json:"description,omitempty" db:"description"`
 	Privileges  class.ArrString `json:"privileges,omitempty" db:"privileges"`
+	Immutable   class.Bool      `json:"immutable,omitempty" db:"immutable" comment:"内置角色，不可删除"`
+	Extend      class.MapString `json:"extend,omitempty" db:"extend"`
 	CreateDt    class.Time      `json:"createDt,omitempty" db:"createdt"`
+	UpdateDt    class.Time      `json:"updateDt,omitempty" db:"updatedt"`
 	Deleted     class.Bool      `json:"-" db:"deleted" logicDel:"true"`
-	Extend      class.MapString `json:"extend,omitempty" db:"extend" comment:"immutable:不可删除"`
 }
 
 func (th *Role) Scan(value any) error {

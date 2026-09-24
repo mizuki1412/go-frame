@@ -8,6 +8,7 @@ import (
 	"github.com/example/go-frame/mod/user/dao/departmentdao"
 	"github.com/example/go-frame/mod/user/dao/roledao"
 	"github.com/example/go-frame/mod/user/dao/userdao"
+	"github.com/example/go-frame/mod/user/dao/userroledao"
 	"github.com/example/go-frame/mod/user/model"
 	"github.com/example/go-frame/pkg/class"
 	"github.com/example/go-frame/pkg/class/exception"
@@ -40,6 +41,7 @@ func Login(username, phone, pwd string) *model.User {
 	if cryptokit.NeedUpgrade(user.Pwd.String) {
 		// 惰性升级：存量 MD5 密码在登录成功时改存为 bcrypt
 		user.Pwd.Set(cryptokit.HashPwd(pwd))
+		user.UpdateDt.Set(time.Now())
 		dao.UpdateObj(user)
 	}
 	if user.Status.Int32 == model.UserStatusFreeze {
@@ -63,6 +65,7 @@ func UpdatePwd(uid int64, oldPwd, newPwd string) {
 		panic(exception.New("原密码错误"))
 	}
 	user.Pwd.Set(cryptokit.HashPwd(newPwd))
+	user.UpdateDt.Set(time.Now())
 	dao.UpdateObj(user)
 }
 
@@ -130,6 +133,7 @@ func UpdateUserInfo(uid int64, params UpdateUserInfoParams) {
 		}
 		user.Pwd.Set(cryptokit.HashPwd(params.NewPwd.String))
 	}
+	u.UpdateDt.Set(time.Now())
 	dao.UpdateObj(u)
 }
 
@@ -145,9 +149,10 @@ func ListUsers(params ListUsersParams) []*model.User {
 }
 
 type AddUserParams struct {
-	Username   class.String `validate:"required"`
-	Pwd        class.String `validate:"required"`
-	Role       class.Int64
+	Username class.String `validate:"required"`
+	Pwd      class.String `validate:"required"`
+	// Roles 角色 id 列表（多角色），经 sys_user_role 中间表绑定
+	Roles      class.ArrInt
 	Department class.Int64
 	Name       class.String
 	Phone      class.String
@@ -158,7 +163,8 @@ type AddUserParams struct {
 	ExtendJson class.MapString
 }
 
-// AddUser B7: 不复用已删除用户记录，避免脏数据。B8: 查 role 用 OptsNone。
+// AddUser 新增用户，角色绑定与用户插入在同一事务内完成。
+// B7: 不复用已删除用户记录，避免脏数据。
 func AddUser(params AddUserParams, checkSms bool) *model.User {
 	dao := userdao.New(userdao.OptsNone)
 	if dao.FindByUsername(params.Username.String) != nil {
@@ -170,20 +176,10 @@ func AddUser(params AddUserParams, checkSms bool) *model.User {
 	if params.Phone.Valid && checkSms && (!params.Sms.Valid || rediskit.Get(context2.Background(), rediskit.GetKeyWithPrefix("sms:"+params.Phone.String), "") != params.Sms.String) {
 		panic(exception.New("验证码错误"))
 	}
+	roles := loadRoles(params.Roles.Array) // 校验角色存在性，非法 id 直接报错
 	u := &model.User{}
 	u.CreateDt.Set(time.Now())
-	if params.Role.IsValid() {
-		// B8: 只需 role 自身，无需级联 department
-		roleDao := roledao.New(roledao.OptsNone)
-		r := roleDao.SelectOneById(params.Role)
-		if r == nil {
-			panic(exception.New("角色不存在"))
-		}
-		u.Role = r
-		if !params.Department.IsValid() && r.Department != nil {
-			u.Department = r.Department
-		}
-	}
+	u.Roles = roles
 	if params.Department.IsValid() {
 		deptDao := departmentdao.New(departmentdao.OptsNone)
 		dept := deptDao.SelectOneById(params.Department.Int64)
@@ -216,8 +212,25 @@ func AddUser(params AddUserParams, checkSms bool) *model.User {
 	if params.ExtendJson.Valid {
 		u.Extend.PutAll(params.ExtendJson.Map)
 	}
-	dao.InsertObj(u)
+	// 用户行与角色绑定必须原子：InsertObj 回填自增 id 后才能写中间表
+	sqlkit.TxArea(func(targetDS *sqlkit.DataSource) {
+		dao1 := userdao.New(userdao.OptsNone, targetDS)
+		dao1.InsertObj(u)
+		userroledao.New(userroledao.OptsNone, targetDS).ReplaceForUser(u.Id, params.Roles.Array)
+	})
 	return u
+}
+
+// loadRoles 批量校验并加载角色，任一 id 不存在则报错。
+func loadRoles(roleIds []int64) []*model.Role {
+	if len(roleIds) == 0 {
+		return nil
+	}
+	roles := roledao.New(roledao.OptsNone).SelectByIds(roleIds)
+	if len(roles) != len(roleIds) {
+		panic(exception.New("角色不存在"))
+	}
+	return roles
 }
 
 type UpdateUserParams struct {
@@ -229,8 +242,9 @@ type UpdateUserParams struct {
 	Image      class.String
 	Address    class.String
 	Pwd        class.String
-	Role       class.Int64
 	Department class.Int64
+	// Roles 角色 id 列表；Valid=true 且空数组表示清空全部角色
+	Roles      class.ArrInt
 	ExtendJson class.MapString
 }
 
@@ -241,8 +255,8 @@ func UpdateUser(params UpdateUserParams) {
 	if u == nil {
 		panic(exception.New("用户不存在"))
 	}
-	// B9: Role.Id == 0 表示该用户绑定了内置超级管理员角色，不允许修改
-	if u.Role != nil && u.Role.Id == 0 {
+	// B9: 内置超级管理员角色（id=0）不允许通过管理员接口改绑
+	if u.HasRole(model.RoleIdSuperAdmin) {
 		panic(exception.New("该用户不能设置"))
 	}
 	if params.Phone.Valid && params.Phone.String != "" && params.Phone.String != u.Phone.String && dao.FindByPhone(params.Phone.String) != nil {
@@ -254,16 +268,9 @@ func UpdateUser(params UpdateUserParams) {
 		}
 		u.Username.Set(params.Username.String)
 	}
-	if params.Role.Int64 > 0 && (u.Role == nil || params.Role.Int64 != u.Role.Id) {
-		rdao := roledao.New(roledao.OptsDefault)
-		r := rdao.SelectOneById(params.Role)
-		if r == nil {
-			panic(exception.New("role不存在"))
-		}
-		u.Role = r
-		if !params.Department.IsValid() {
-			u.Department = r.Department
-		}
+	// 角色先校验存在性（非法 id 提前报错），再在事务内整体替换绑定
+	if params.Roles.Valid {
+		loadRoles(params.Roles.Array)
 	}
 	if params.Department.IsValid() && (u.Department == nil || params.Department.Int64 != u.Department.Id) {
 		deptDao := departmentdao.New(departmentdao.OptsNone)
@@ -294,7 +301,14 @@ func UpdateUser(params UpdateUserParams) {
 	if params.ExtendJson.Valid {
 		u.Extend.PutAll(params.ExtendJson.Map)
 	}
-	dao.UpdateObj(u)
+	u.UpdateDt.Set(time.Now())
+	sqlkit.TxArea(func(targetDS *sqlkit.DataSource) {
+		dao1 := userdao.New(userdao.OptsNone, targetDS)
+		dao1.UpdateObj(u)
+		if params.Roles.Valid {
+			userroledao.New(userroledao.OptsNone, targetDS).ReplaceForUser(u.Id, params.Roles.Array)
+		}
+	})
 }
 
 type DeleteUserParams struct {
@@ -315,17 +329,19 @@ func DeleteUser(operatorUid int64, params DeleteUserParams) {
 	if target == nil {
 		panic(exception.New("用户不存在"))
 	}
-	// B9: Role.Id == 0 表示内置超级管理员，不允许删除/冻结
-	if target.Role != nil && target.Role.Id == 0 {
+	// B9: 内置超级管理员角色（id=0）不允许删除/冻结
+	if target.HasRole(model.RoleIdSuperAdmin) {
 		panic(exception.New("该用户不能设置"))
 	}
-	if target.Extend.GetBool("immutable") {
+	if target.Immutable.Bool {
 		panic(exception.New("该用户不可删除"))
 	}
 	sqlkit.TxArea(func(targetDS *sqlkit.DataSource) {
 		dao1 := userdao.New(userdao.OptsNone, targetDS) // B10: OptsNone
+		urDao := userroledao.New(userroledao.OptsNone, targetDS)
 		switch params.Off.Int32 {
 		case 0:
+			urDao.DeleteByUserId(params.Id)
 			dao1.SetNull(params.Id)
 			dao1.DeleteById(params.Id)
 		case 1:

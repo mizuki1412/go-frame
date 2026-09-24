@@ -35,3 +35,4 @@ logs/
 # OpenCode config
 .env
 .env.local
+.zcodeignore

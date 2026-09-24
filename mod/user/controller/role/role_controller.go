@@ -36,12 +36,8 @@ func DeleteRole(ctx *context.Context) {
 	ctx.JsonSuccess()
 }
 
-type listRolesParam = service.ListRolesParam
-
 func ListRoles(ctx *context.Context) {
-	params := listRolesParam{}
-	ctx.BindForm(&params)
-	ctx.JsonSuccess(service.ListRoles(params))
+	ctx.JsonSuccess(service.ListRoles())
 }
 
 type listByRoleParams = service.ListRolesWithUserParams

@@ -2,20 +2,23 @@ package model
 
 import (
 	"database/sql/driver"
+
 	"github.com/example/go-frame/pkg/class"
 	"github.com/spf13/cast"
 )
 
 type Department struct {
-	Id       int64           `auto:"true" json:"id" db:"id" pk:"true" table:"sys_department"`
-	No       class.String    `json:"no,omitempty" db:"no" comment:"编号"`
-	Name     class.String    `json:"name,omitempty" db:"name"`
-	Descr    class.String    `json:"descr,omitempty" db:"descr" comment:"描述"`
-	Parent   *Department     `json:"parent,omitempty" db:"parent"`
-	Extend   class.MapString `json:"extend,omitempty" db:"extend"`
-	CreateDt class.Time      `json:"createDt,omitempty" db:"createdt"`
-	Deleted  class.Bool      `json:"-" db:"deleted" logicDel:"true"`
-	Children []*Department   `json:"children"`
+	Id          int64           `auto:"true" json:"id" db:"id" pk:"true" table:"sys_department"`
+	No          class.String    `json:"no,omitempty" db:"no" comment:"编号"`
+	Name        class.String    `json:"name,omitempty" db:"name"`
+	Description class.String    `json:"description,omitempty" db:"description" comment:"描述"`
+	Parent      *Department     `json:"parent,omitempty" db:"parent"`
+	Immutable   class.Bool      `json:"immutable,omitempty" db:"immutable" comment:"内置部门，不可删除"`
+	Extend      class.MapString `json:"extend,omitempty" db:"extend"`
+	CreateDt    class.Time      `json:"createDt,omitempty" db:"createdt"`
+	UpdateDt    class.Time      `json:"updateDt,omitempty" db:"updatedt"`
+	Deleted     class.Bool      `json:"-" db:"deleted" logicDel:"true"`
+	Children    []*Department   `json:"children"`
 }
 
 func (th *Department) Scan(value any) error {

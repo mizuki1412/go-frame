@@ -184,3 +184,30 @@ func (th MapString) GetBool(key string) bool {
 func (th MapString) GetMap(key string) map[string]any {
 	return cast.ToStringMap(th.Get(key))
 }
+
+// GetArrString 取字符串数组，兼容三种来源：Scan/JSON 还原出的 []any、
+// Go 侧 PutAll 写入的 []string、字符串形态的 JSON（如 "[a,b]"）。
+func (th MapString) GetArrString(key string) []string {
+	v := th.Get(key)
+	switch val := v.(type) {
+	case []string:
+		return val
+	case []any:
+		arr := make([]string, 0, len(val))
+		for _, e := range val {
+			arr = append(arr, cast.ToString(e))
+		}
+		return arr
+	case string:
+		if val == "" {
+			return nil
+		}
+		var arr []string
+		if err := jsonkit.ParseObj(val, &arr); err != nil {
+			return nil
+		}
+		return arr
+	default:
+		return nil
+	}
+}

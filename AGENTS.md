@@ -38,8 +38,16 @@ mod/<name>/                   # business module, strict 4 layers
   controller/<resource>/        index.go (routing + OpenAPI), *_controller.go (handlers)
 cmd/                          # extra cobra subcommands, registered via cli.AddChildCMD(...)
                                 agent.go（agent demo REPL）, mqtt.go, tcp_server.go, web_static_server.go
+sql/                          # user 模块 DDL：user.mysql8.sql（MySQL 8.0+）/ user.pgsql.sql（PG 12+），两版语义一致
 main.go                       # cli.RootCMD(...) → restkit.AddActions(user.All()...) → restkit.Run()
 ```
+
+## User module data model (mod/user)
+
+- `sys_user` 单列 `department`（部门决定数据范围）；角色为**多对多**：`sys_user_role` 中间表（组合主键 userid+roleid，无逻辑删除），`User.Roles []*Role` 无 db tag，仅由 `userdao` 的 `NewCascadeManyLink` 经中间表批量装配（整批 2 条 SQL）。角色为全局对象，`Role` **不再有 Department**。
+- `immutable`（user/role/department）是正式列，不再塞 Extend；`Extend` 只放 `privilegeExclude`（`User.HasPrivilege` = 多角色并集 − 剔除）。`role id=0` 为内置超级管理员（`model.RoleIdSuperAdmin`），持有者禁止经管理员接口改绑/删除。
+- 角色绑定为整体替换语义（`userroledao.ReplaceForUser`：先删后插），AddUser/UpdateUser 中用户行与绑定同事务（`sqlkit.TxArea` + 用 `targetDS` 构造 dao）。
+- 四张业务表均有 `createdt`/`updatedt`，服务层每次 `UpdateObj` 前显式 `UpdateDt.Set(time.Now())`（sqlkit 不自动填充）。
 
 ## Config
 

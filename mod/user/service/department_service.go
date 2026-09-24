@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/example/go-frame/mod/user/dao/departmentdao"
-	"github.com/example/go-frame/mod/user/dao/roledao"
 	"github.com/example/go-frame/mod/user/dao/userdao"
 	"github.com/example/go-frame/mod/user/model"
 	"github.com/example/go-frame/pkg/class"
@@ -37,7 +36,7 @@ func CreateDepartment(params CreateDepartmentParams) {
 		department.No.Set(params.No.String)
 	}
 	if params.Description.Valid {
-		department.Descr.Set(params.Description.String)
+		department.Description.Set(params.Description.String)
 	}
 	department.CreateDt.Set(time.Now())
 	department.Extend.Set(params.Extend)
@@ -70,7 +69,7 @@ func UpdateDepartment(params UpdateDepartmentParams) {
 		department.Name.Set(params.Name.String)
 	}
 	if params.Description.Valid {
-		department.Descr.Set(params.Description.String)
+		department.Description.Set(params.Description.String)
 	}
 	if params.ParentId.Valid && (department.Parent == nil || params.ParentId.Int64 != department.Parent.Id) {
 		// B15: 环检测 — 不能将自身或自己的后代设为 parent
@@ -86,6 +85,7 @@ func UpdateDepartment(params UpdateDepartmentParams) {
 	if params.Extend.Valid {
 		department.Extend.PutAll(params.Extend.Map)
 	}
+	department.UpdateDt.Set(time.Now())
 	dao.UpdateObj(department)
 }
 
@@ -93,24 +93,18 @@ type DeleteDepartmentParams struct {
 	Id int64 `validate:"required"`
 }
 
-// DeleteDepartment B13: 用 GetBool 替代类型断言。
+// DeleteDepartment 角色已与部门解耦（角色为全局对象），此处只需检查部门下是否还有用户。
 func DeleteDepartment(id int64) {
 	dao := departmentdao.New(departmentdao.OptsNone)
 	department := dao.SelectOneById(id)
 	if department == nil {
 		panic(exception.New("部门不存在"))
 	}
-	if department.Extend.GetBool("immutable") { // B13
+	if department.Immutable.Bool {
 		panic(exception.New("该部门不可删除"))
 	}
-	roleDao := roledao.New(roledao.OptsNone)
-	rNum := roleDao.CountFromRootDepart(department.Id)
-	if rNum > 0 {
-		panic(exception.New("部门下还有角色,不能删除"))
-	}
 	userDao := userdao.New(userdao.OptsNone)
-	uNum := userDao.CountFromRootDepart(department.Id)
-	if uNum > 0 {
+	if userDao.CountFromRootDepart(department.Id) > 0 {
 		panic(exception.New("部门下还有用户,不能删除"))
 	}
 	dao.DeleteById(department.Id)
