@@ -2,15 +2,25 @@ package sessionstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/example/go-frame/pkg/class/exception"
+	"github.com/example/go-frame/pkg/cli/configkey"
+	"github.com/example/go-frame/pkg/service/configkit"
+	"github.com/example/go-frame/pkg/service/logkit"
 )
 
 // checkpointID 会话级 checkpoint 标识：同一会话的每轮 Run 共用，
 // 中断（cancel/interrupt）后执行 Runner.Resume(ctx, checkpointID) 从断点恢复。
 const CheckpointID = "agent_session"
+
+// runTimeoutDefaultSeconds 单轮运行超时默认秒数。须与 bind.go 中
+// agent.runTimeout flag 的默认值一致（viper 对未改动的 flag 走 flag 默认值兜底）。
+const runTimeoutDefaultSeconds = 600
 
 // Session 维护多轮对话的会话历史并驱动 agent 自循环（ReAct）执行。
 //
@@ -97,9 +107,21 @@ func (s *Session) Reset() {
 // 2) 将完整历史交给 agent（ReAct 自循环，工具结果在循环内即时回填）
 // 3) 把本轮 agent 产生的 assistant/tool 消息回写进历史，供下一轮继续
 //
+// agent.runTimeout > 0 时本轮附加整轮超时（含模型请求与工具执行）：
+// 超时若走 interrupt 路径，执行状态随 checkpoint 落盘、可 Resume 续跑；
+// 若以错误呈现，则回传友好的超时错误。
+//
 // 返回值 interrupted 表示本轮是否被中断（event.Action.Interrupted）：
 // 中断时执行状态已写入 CheckPointStore，可调用 Resume 从断点继续。
 func (s *Session) Run(ctx context.Context, input string) (interrupted bool, err error) {
+	// 0) 按 agent.runTimeout 附加整轮超时（0 表示不限制）
+	timeoutSec := configkit.GetInt(configkey.AgentRunTimeout, runTimeoutDefaultSeconds)
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+	}
+
 	// 1) 用户输入追加进会话历史
 	s.history = append(s.history, schema.UserMessage(input))
 	turnStart := len(s.history) - 1 // 本轮 user message 下标
@@ -115,11 +137,23 @@ func (s *Session) Run(ctx context.Context, input string) (interrupted bool, err 
 			break
 		}
 		if event.Err != nil {
+			s.perf.Interrupt() // 异常退出也结算进行中的调用，避免耗时挂到下轮
+			// 本轮尚未产生任何模型输出时回滚 user message，避免历史里留下无下文的一轮
+			if len(s.history) == turnStart+1 {
+				s.history = s.history[:turnStart+1]
+			}
+			if errors.Is(event.Err, context.DeadlineExceeded) {
+				return interrupted, exception.New(fmt.Sprintf("本轮运行超时（上限 %d 秒，可调大 agent.runTimeout）: %v", timeoutSec, event.Err))
+			}
 			return interrupted, event.Err
 		}
 		if event.Action != nil && event.Action.Interrupted != nil {
 			s.perf.Interrupt() // 结算进行中的调用，避免耗时挂到下次 Resume
 			interrupted = true
+			// 整轮超时触发的取消同样走 interrupt 落盘：注明原因，resume 可从断点续跑
+			if ctx.Err() != nil {
+				logkit.Info("本轮运行超时被中断，checkpoint 已保存", "timeoutSeconds", timeoutSec)
+			}
 			break
 		}
 		if event.Output == nil || event.Output.MessageOutput == nil {
@@ -166,9 +200,16 @@ func (s *Session) Run(ctx context.Context, input string) (interrupted bool, err 
 
 // Resume 从 CheckPointStore 断点恢复上一轮被中断的运行，
 // 继续流式打印并回写会话历史。要求：store 非 nil 且上一轮发生过中断。
+// 超时策略与 Run 一致（agent.runTimeout，0 表示不限制）。
 func (s *Session) Resume(ctx context.Context) error {
 	if s.store == nil {
 		return fmt.Errorf("未启用 checkpoint（NewSession 的 store 为 nil），无法 Resume")
+	}
+	timeoutSec := configkit.GetInt(configkey.AgentRunTimeout, runTimeoutDefaultSeconds)
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
 	}
 	// 恢复同样记录性能数据（等待模型响应的起点重置）
 	s.perf.LLMStart()
@@ -182,11 +223,18 @@ func (s *Session) Resume(ctx context.Context) error {
 			break
 		}
 		if event.Err != nil {
+			s.perf.Interrupt() // 异常退出也结算进行中的调用，避免耗时挂到下轮
+			if errors.Is(event.Err, context.DeadlineExceeded) {
+				return exception.New(fmt.Sprintf("恢复运行超时（上限 %d 秒，可调大 agent.runTimeout）: %v", timeoutSec, event.Err))
+			}
 			return event.Err
 		}
 		if event.Action != nil && event.Action.Interrupted != nil {
 			// 再次中断：状态已回写 store，可再次 Resume
 			s.perf.Interrupt()
+			if ctx.Err() != nil {
+				logkit.Info("恢复运行超时被中断，checkpoint 已保存", "timeoutSeconds", timeoutSec)
+			}
 			break
 		}
 		if event.Output == nil || event.Output.MessageOutput == nil {

@@ -154,6 +154,11 @@ func bindDefaultFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String(configkey.AgentCheckpointDir, "", "CheckPointStore 本地目录，留空不启用 checkpoint")
 	cmd.PersistentFlags().String(configkey.AgentWorkspaceDir, "", "agent 工作区目录，留空取程序启动时的工作目录")
 	cmd.PersistentFlags().String(configkey.AgentSessionDir, "", "会话历史持久化目录，留空不持久化会话历史")
+	cmd.PersistentFlags().Int(configkey.AgentRunTimeout, 600, "单轮运行超时秒数（含模型请求与工具执行），0 不限制")
+	cmd.PersistentFlags().Int(configkey.AgentSummarizationTriggerTokens, 100000, "会话历史 token 压缩触发阈值，0 不启用摘要压缩")
+	cmd.PersistentFlags().Int(configkey.AgentToolResultMaxChars, 50000, "单条工具结果最大字符数，超出卸载到本地文件，0 不截断")
+	cmd.PersistentFlags().Int(configkey.AgentToolResultClearTokens, 160000, "历史工具结果总 token 清理阈值，0 不清理")
+	cmd.PersistentFlags().String(configkey.AgentAgentsMdFiles, "AGENTS.md", "注入模型输入的 AGENTS.md 文件列表（逗号分隔，相对工作区解析），留空不注入")
 
 	// ragflow 知识库检索
 	cmd.PersistentFlags().String(configkey.RagflowBaseUrl, "", "RAGFlow 服务地址，如 http://ragflow-host:9380")

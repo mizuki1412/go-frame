@@ -45,6 +45,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// MCP 连接（含 stdio 子进程）随会话结束统一清理
+	defer runtime.CloseMCPClients()
 
 	// 按 agent.sessionDir 配置创建会话历史存储（为空则不持久化）
 	var sessStore *sessionstore.SessionStore

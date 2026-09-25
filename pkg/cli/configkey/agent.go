@@ -41,3 +41,27 @@ const AgentWorkspaceDir = "agent.workspaceDir"
 // history.json 存完整消息历史，perf.json 存调用事件数组（每次模型/工具调用的耗时明细），
 // 进程重启后输入 session <id> 可恢复历史对话）。留空表示不持久化会话历史。
 const AgentSessionDir = "agent.sessionDir"
+
+// AgentRunTimeout 单轮运行（含模型请求与工具执行的完整一轮）的整轮超时秒数，
+// 0 表示不限制。默认 600（参考 Pi 系最小 Coding Agent 的 10 分钟整轮上限）。
+const AgentRunTimeout = "agent.runTimeout"
+
+// AgentSummarizationTriggerTokens 会话历史 token 触发阈值：超过后由 summarization
+// 中间件把旧历史压缩为一条摘要消息（模型调用前的临时改写，不落盘）。
+// 0 表示不启用摘要压缩。默认 100000。
+const AgentSummarizationTriggerTokens = "agent.summarizationTriggerTokens"
+
+// AgentToolResultMaxChars 单条工具结果的最大字符数：超出部分由 reduction 中间件
+// 卸载到本地临时文件、原位替换为截断提示（模型可用 read_file 取回全文）。
+// 0 表示不截断。默认 50000（与 eino reduction 默认一致）。
+const AgentToolResultMaxChars = "agent.toolResultMaxChars"
+
+// AgentToolResultClearTokens 发送模型前统计历史中工具结果总 token：超过该阈值时
+// 由 reduction 中间件把较早的工具结果替换为占位提示（原文已卸载到本地文件）。
+// 0 表示不清理。默认 160000（与 eino reduction 默认一致；小上下文模型建议调低）。
+const AgentToolResultClearTokens = "agent.toolResultClearTokens"
+
+// AgentAgentsMdFiles 注入模型输入的 AGENTS.md 文件列表（英文逗号分隔；
+// 相对路径按 agent.workspaceDir 解析，注入发生在模型调用前、不进会话历史）。
+// 留空表示不注入。默认 "AGENTS.md"（工作区无此文件时静默跳过）。
+const AgentAgentsMdFiles = "agent.agentsMdFiles"
