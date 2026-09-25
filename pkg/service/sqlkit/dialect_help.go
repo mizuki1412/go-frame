@@ -18,6 +18,7 @@ func pgArray(arr any) (string, []any) {
 	var flags []string
 	switch arr.(type) {
 	case []int:
+		suffix = "int[]"
 		arr := arr.([]int)
 		flags = make([]string, len(arr))
 		args = make([]any, len(arr))
@@ -194,25 +195,33 @@ func rawPlaceholder(driver string, index int) string {
 }
 
 // args中部分值转换
-// S19: 增加快速路径——若 args 不含任何需转换的类型，直接返回原切片，避免高频分配。
+// S19: 快速路径——若 args 不含任何需转换的类型，直接返回原切片，避免高频分配。
+// 所有 driver 统一走探测：非 sqlite/taos 只需关注时间类型；taos 还需探测含 ' 的字符串。
 func argsWrap(driver string, args []any) []any {
 	// todo 其他值类型
-	sqliteOrTaos := driver == sqlconst.Sqlite3 || sqlconst.IsTaos(driver)
-	if !sqliteOrTaos {
-		// 非 sqlite/taos：仅需处理 class.Time / time.Time；先快速探测是否存在
-		need := false
-		for _, e := range args {
-			switch e.(type) {
-			case class.Time, time.Time:
-				need = true
-			}
-			if need {
-				break
+	isTaos := sqlconst.IsTaos(driver)
+	sqliteOrTaos := driver == sqlconst.Sqlite3 || isTaos
+	need := false
+	for _, e := range args {
+		switch e.(type) {
+		case class.Time, time.Time:
+			need = true
+		case string, class.String:
+			// taos未对其中的'字符转义, 但在insert中转义了？todo
+			if isTaos {
+				if ev, ok := e.(string); ok {
+					need = strings.Contains(ev, "'")
+				} else {
+					need = strings.Contains(e.(class.String).String, "'")
+				}
 			}
 		}
-		if !need {
-			return args
+		if need {
+			break
 		}
+	}
+	if !need {
+		return args
 	}
 	new_args := make([]any, 0, len(args))
 	for _, e := range args {
@@ -266,16 +275,23 @@ func handlePlaceholderInWhere(driver string, pred any, args ...any) any {
 		index := 0
 		pa := ""
 		ps := strings.Split(p, "?")
-		for _, e := range ps {
-			if len(args) <= index {
+		for i, e := range ps {
+			pa += e
+			if i == len(ps)-1 {
+				// 最后一段是最后一个占位符之后的字面量，原样保留
 				break
 			}
-			if _, ok := args[index].(string); ok {
-				pa += e + "'?'"
+			if index < len(args) {
+				if _, ok := args[index].(string); ok {
+					pa += "'?'"
+				} else {
+					pa += "?"
+				}
+				index++
 			} else {
-				pa += e + "?"
+				// 占位符多于参数：保留占位符，交由驱动报参数不足
+				pa += "?"
 			}
-			index++
 		}
 		return pa
 	}

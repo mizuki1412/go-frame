@@ -1,6 +1,7 @@
 package sqlkit
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Masterminds/squirrel"
@@ -21,7 +22,13 @@ func (dao UpdateDao[T]) Print() {
 }
 
 func (dao UpdateDao[T]) Exec() int64 {
-	res := dao.ExecRaw(dao.Sql())
+	return dao.ExecCtx(context.Background())
+}
+
+// ExecCtx 带 ctx 的执行，支持超时与取消传播。
+func (dao UpdateDao[T]) ExecCtx(ctx context.Context) int64 {
+	sql, args := dao.Sql()
+	res := dao.ExecRawCtx(ctx, sql, args)
 	rn, _ := res.RowsAffected()
 	logkit.Debug("sql res", "rows", rn)
 	return rn
@@ -123,9 +130,10 @@ func (dao UpdateDao[T]) WhereLike(field string, val string) UpdateDao[T] {
 }
 
 // ============ S3: jsonb 谓词（防注入）============
+// key 与值均参数化，与 SelectDao.WhereJsonbPathText 保持一致。
 func (dao UpdateDao[T]) WhereJsonbPathText(jsonbCol, key, op string, val any) UpdateDao[T] {
 	col := dao.modelMeta.escapeName(dao.dataSource, jsonbCol)
-	return dao.Where(fmt.Sprintf("%s->>%s %s ?", col, dao.dataSource.EscapeName(key), op), val)
+	return dao.Where(fmt.Sprintf("%s->>? %s ?", col, op), key, val)
 }
 func (dao UpdateDao[T]) WhereJsonbPathEq(jsonbCol, key string, val any) UpdateDao[T] {
 	return dao.WhereJsonbPathText(jsonbCol, key, "=", val)

@@ -1,6 +1,7 @@
 package sqlkit
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -14,6 +15,11 @@ import (
 )
 
 func (dao Dao[T]) InsertObj(dest *T) {
+	dao.InsertObjCtx(context.Background(), dest)
+}
+
+// InsertObjCtx 带 ctx 的插入，支持超时与取消传播。
+func (dao Dao[T]) InsertObjCtx(ctx context.Context, dest *T) {
 	var columns []string
 	var vals []any
 	rv := reflect.ValueOf(dest).Elem()
@@ -46,7 +52,7 @@ func (dao Dao[T]) InsertObj(dest *T) {
 		}
 		ss := fmt.Sprintf("insert into %s(%s) values(%s)",
 			dao.modelMeta.getTable(dao.dataSource), strings.Join(columns, ", "), strings.Join(valPlaceholders, ", "))
-		res := dao.ExecRaw(ss, vals)
+		res := dao.ExecRawCtx(ctx, ss, vals)
 		rn, _ := res.RowsAffected()
 		logkit.Debug("sql res", "rows", rn)
 	} else if sqlconst.IsPostgresType(dao.dataSource.Driver) || dao.dataSource.Driver == sqlconst.Sqlite3 {
@@ -54,13 +60,14 @@ func (dao Dao[T]) InsertObj(dest *T) {
 		builder := dao.Insert()
 		builder = builder.Columns(columns...).Values(vals...)
 		builder = builder.Suffix("returning *")
-		builder.ReturnOne(dest)
+		builder.ReturnOneCtx(ctx, dest)
 	} else {
 		// MySQL/SQL Server/Oracle/DM 等不支持 RETURNING *。
 		// S8: 通过 LastInsertId 回填自增主键到 dest，与 PG 的 RETURNING * 行为对齐。
 		builder := dao.Insert()
 		builder = builder.Columns(columns...).Values(vals...)
-		res := dao.ExecRaw(builder.Sql())
+		sql, args := builder.Sql()
+		res := dao.ExecRawCtx(ctx, sql, args)
 		if id, err := res.LastInsertId(); err == nil && id > 0 {
 			rv := reflect.ValueOf(dest).Elem()
 			for _, pk := range dao.modelMeta.allPKs {
@@ -77,6 +84,11 @@ func (dao Dao[T]) InsertObj(dest *T) {
 // INSERT IGNORE；其余驱动退化为普通插入。返回受影响行数（0=冲突跳过）。
 // 调用方须保证表上存在对应唯一索引，否则冲突不生效。
 func (dao Dao[T]) InsertObjIgnoreConflict(dest *T) int64 {
+	return dao.InsertObjIgnoreConflictCtx(context.Background(), dest)
+}
+
+// InsertObjIgnoreConflictCtx 带 ctx 的 InsertObjIgnoreConflict。
+func (dao Dao[T]) InsertObjIgnoreConflictCtx(ctx context.Context, dest *T) int64 {
 	var columns []string
 	var vals []any
 	rv := reflect.ValueOf(dest).Elem()
@@ -95,16 +107,91 @@ func (dao Dao[T]) InsertObjIgnoreConflict(dest *T) int64 {
 	switch {
 	case sqlconst.IsPostgresType(dao.dataSource.Driver) || dao.dataSource.Driver == sqlconst.Sqlite3:
 		builder = builder.Suffix("on conflict do nothing")
-		return builder.Exec()
+		return builder.ExecCtx(ctx)
 	case dao.dataSource.Driver == sqlconst.Mysql:
-		res := dao.ExecRaw("insert ignore into "+dao.modelMeta.getTable(dao.dataSource)+
-			"("+strings.Join(columns, ", ")+") values("+
+		// 手拼 SQL 的列名同样要转义，防保留字/特殊字符
+		quoted := make([]string, len(columns))
+		for i, c := range columns {
+			quoted[i] = dao.dataSource.EscapeName(c)
+		}
+		res := dao.ExecRawCtx(ctx, "insert ignore into "+dao.modelMeta.getTable(dao.dataSource)+
+			"("+strings.Join(quoted, ", ")+") values("+
 			strings.TrimSuffix(strings.Repeat("?, ", len(vals)), ", ")+")", vals)
 		rn, _ := res.RowsAffected()
 		return rn
 	default:
-		return builder.Exec()
+		return builder.ExecCtx(ctx)
 	}
+}
+
+// UpsertObj 插入，唯一键冲突时改为更新（须保证表上有对应唯一索引）。
+// PG/Kingbase/SQLite 走 ON CONFLICT (conflictCols...) DO UPDATE；MySQL 走
+// ON DUPLICATE KEY UPDATE；其余驱动不支持，直接 panic。更新列为除主键/自增与
+// 冲突列之外的全部可更新列（与 UpdateObj 的列口径一致）。
+func (dao Dao[T]) UpsertObj(dest *T, conflictCols ...string) int64 {
+	return dao.UpsertObjCtx(context.Background(), dest, conflictCols...)
+}
+
+// UpsertObjCtx 带 ctx 的 UpsertObj。
+func (dao Dao[T]) UpsertObjCtx(ctx context.Context, dest *T, conflictCols ...string) int64 {
+	builder := dao.buildUpsert(dest, conflictCols...)
+	return builder.ExecCtx(ctx)
+}
+
+// buildUpsert 构造 upsert 语句（insert ... on conflict/do duplicate key ...），
+// 与执行分离以便对生成的 SQL 做单测。
+func (dao Dao[T]) buildUpsert(dest *T, conflictCols ...string) InsertDao[T] {
+	if len(conflictCols) == 0 {
+		panic(exception.New("UpsertObj 需要至少一个冲突列"))
+	}
+	var columns []string
+	var vals []any
+	rv := reflect.ValueOf(dest).Elem()
+	for _, e := range dao.modelMeta.allInsertKeys {
+		val := e.val(rv, dao.dataSource.Driver)
+		if val == nil {
+			continue
+		}
+		columns = append(columns, e.OriKey)
+		vals = append(vals, val)
+	}
+	if len(columns) == 0 {
+		panic(exception.New("no fields", 2))
+	}
+	conflict := make(map[string]bool, len(conflictCols))
+	for _, c := range conflictCols {
+		conflict[c] = true
+	}
+	builder := dao.Insert().Columns(columns...).Values(vals...)
+	// 更新列 = 可更新列（含逻辑删除，与 UpdateObj 口径一致）去掉冲突列
+	var upKeys []ModelMetaKey
+	for _, e := range dao.modelMeta.allUpdateKeys {
+		if conflict[e.OriKey] {
+			continue
+		}
+		upKeys = append(upKeys, e)
+	}
+	if len(upKeys) == 0 {
+		panic(exception.New("UpsertObj 更新列为空：冲突列覆盖了全部可更新列"))
+	}
+	switch {
+	case sqlconst.IsPostgresType(dao.dataSource.Driver) || dao.dataSource.Driver == sqlconst.Sqlite3:
+		setPairs := make([]string, len(upKeys))
+		for i, e := range upKeys {
+			setPairs[i] = e.Key + "=excluded." + e.Key
+		}
+		quoted := dao.modelMeta.escapeNames(dao.dataSource, conflictCols)
+		builder = builder.Suffix("on conflict ("+strings.Join(quoted, ", ")+") do update set "+strings.Join(setPairs, ", "))
+	case dao.dataSource.Driver == sqlconst.Mysql:
+		setPairs := make([]string, len(upKeys))
+		for i, e := range upKeys {
+			setPairs[i] = e.Key + "=values(" + e.Key + ")"
+		}
+		builder = builder.Suffix("on duplicate key update " + strings.Join(setPairs, ", "))
+	default:
+		panic(exception.New("UpsertObj not supported on driver " + dao.dataSource.Driver))
+	}
+	return builder
 }
 
 // setAutoPK 将自增主键回填到 model 的 class.Int64 / sql.NullInt64 / 原生整数字段。
@@ -127,43 +214,53 @@ func setAutoPK(rv reflect.Value, fieldName string, id int64) {
 }
 
 func (dao Dao[T]) InsertBatch(dest []*T) {
+	dao.InsertBatchCtx(context.Background(), dest)
+}
+
+// InsertBatchCtx 带 ctx 的批量插入，支持超时与取消传播。
+func (dao Dao[T]) InsertBatchCtx(ctx context.Context, dest []*T) {
 	// S15: 空切片直接返回，不再 panic（批量导入场景常见空入参）
 	if len(dest) == 0 {
 		return
 	}
-	// 先收集所有行字段的并集，保证每行 vals 与 columns 严格对齐。
-	// 否则当某行字段为 nil 被跳过、而其他行该字段有值时，列与值会错位。
-	rvs := make([]reflect.Value, 0, len(dest))
+	insertKeys := dao.modelMeta.allInsertKeys
+	// 单遍收集：每行按 allInsertKeys 顺序取一次值，同时汇总非空列并集，
+	// 保证每行 vals 与 columns 严格对齐（此前取值两遍；某行字段为 nil 被
+	// 跳过、其他行该字段有值时若不对齐会导致列与值错位）。
+	captured := make([][]any, len(dest))
 	colKeys := make([]ModelMetaKey, 0)
 	colIndex := make(map[string]int)
-	for _, e := range dest {
+	for i, e := range dest {
 		rv := reflect.ValueOf(e).Elem()
-		rvs = append(rvs, rv)
-		for _, k := range dao.modelMeta.allInsertKeys {
-			if k.val(rv, dao.dataSource.Driver) == nil {
+		row := make([]any, len(insertKeys))
+		for j := range insertKeys {
+			k := &insertKeys[j]
+			val := k.val(rv, dao.dataSource.Driver)
+			if val == nil {
 				continue
 			}
+			row[j] = val
 			if _, ok := colIndex[k.OriKey]; !ok {
 				colIndex[k.OriKey] = len(colKeys)
-				colKeys = append(colKeys, k)
+				colKeys = append(colKeys, *k)
 			}
 		}
+		captured[i] = row
 	}
 	if len(colKeys) == 0 {
 		panic(exception.New("no fields", 2))
 	}
 	// 按并集对齐每行 vals，缺失字段补 nil
-	valsArr := make([][]any, 0, len(rvs))
-	for _, rv := range rvs {
-		row := make([]any, len(colKeys))
-		for _, k := range dao.modelMeta.allInsertKeys {
-			val := k.val(rv, dao.dataSource.Driver)
-			if val == nil {
+	valsArr := make([][]any, 0, len(captured))
+	for _, row := range captured {
+		out := make([]any, len(colKeys))
+		for j := range insertKeys {
+			if row[j] == nil {
 				continue
 			}
-			row[colIndex[k.OriKey]] = val
+			out[colIndex[insertKeys[j].OriKey]] = row[j]
 		}
-		valsArr = append(valsArr, row)
+		valsArr = append(valsArr, out)
 	}
 	if sqlconst.IsTaos(dao.dataSource.Driver) {
 		var columns []string
@@ -192,7 +289,7 @@ func (dao Dao[T]) InsertBatch(dest []*T) {
 			}
 			allVals = append(allVals, vals...)
 		}
-		res := dao.ExecRaw(sql, allVals)
+		res := dao.ExecRawCtx(ctx, sql, allVals)
 		rn, _ := res.RowsAffected()
 		logkit.Debug("sql res", "rows", rn)
 	} else {
@@ -200,16 +297,30 @@ func (dao Dao[T]) InsertBatch(dest []*T) {
 		for _, k := range colKeys {
 			columns = append(columns, k.OriKey)
 		}
-		builder := dao.Insert()
-		builder = builder.Columns(columns...)
-		for i := range valsArr {
-			builder = builder.Values(valsArr[i]...)
+		// 分片执行：单语句参数超限（PG 协议 65535 上限、MySQL max_allowed_packet）
+		// 会直接报错，按列数推导单语句行数上限；同一事务/连接内多条执行。
+		chunk := insertBatchChunkSize(len(columns))
+		for start := 0; start < len(valsArr); start += chunk {
+			end := start + chunk
+			if end > len(valsArr) {
+				end = len(valsArr)
+			}
+			builder := dao.Insert()
+			builder = builder.Columns(columns...)
+			for i := start; i < end; i++ {
+				builder = builder.Values(valsArr[i]...)
+			}
+			builder.ExecCtx(ctx)
 		}
-		builder.Exec()
 	}
 }
 
 func (dao Dao[T]) UpdateObj(dest *T) int64 {
+	return dao.UpdateObjCtx(context.Background(), dest)
+}
+
+// UpdateObjCtx 带 ctx 的更新，支持超时与取消传播。
+func (dao Dao[T]) UpdateObjCtx(ctx context.Context, dest *T) int64 {
 	builder := dao.Update()
 	rv := reflect.ValueOf(dest).Elem()
 	for _, e := range dao.modelMeta.allUpdateKeys {
@@ -232,10 +343,15 @@ func (dao Dao[T]) UpdateObj(dest *T) int64 {
 		}
 		builder = builder.Where(e.Key+"=?", v)
 	}
-	return builder.Exec()
+	return builder.ExecCtx(ctx)
 }
 
 func (dao Dao[T]) DeleteById(id ...any) int64 {
+	return dao.DeleteByIdCtx(context.Background(), id...)
+}
+
+// DeleteByIdCtx 带 ctx 的按主键删除，支持超时与取消传播。
+func (dao Dao[T]) DeleteByIdCtx(ctx context.Context, id ...any) int64 {
 	if len(id) != len(dao.modelMeta.allPKs) {
 		panic(exception.New("主键数量不匹配"))
 	}
@@ -245,18 +361,23 @@ func (dao Dao[T]) DeleteById(id ...any) int64 {
 		for i := 0; i < len(dao.modelMeta.allPKs); i++ {
 			builder = builder.Where(dao.modelMeta.allPKs[i].Key+"=?", id[i])
 		}
-		return builder.Exec()
+		return builder.ExecCtx(ctx)
 	} else {
 		builder := dao.Delete()
 		for i := 0; i < len(dao.modelMeta.allPKs); i++ {
 			builder = builder.Where(dao.modelMeta.allPKs[i].Key+"=?", id[i])
 		}
-		return builder.Exec()
+		return builder.ExecCtx(ctx)
 	}
 }
 
 // SelectOneById 根据id获取，计算逻辑删除
 func (dao Dao[T]) SelectOneById(id ...any) *T {
+	return dao.SelectOneByIdCtx(context.Background(), id...)
+}
+
+// SelectOneByIdCtx 带 ctx 的 SelectOneById。
+func (dao Dao[T]) SelectOneByIdCtx(ctx context.Context, id ...any) *T {
 	builder := dao.Select()
 	if len(id) != len(dao.modelMeta.allPKs) {
 		panic(exception.New("主键数量不匹配"))
@@ -264,11 +385,16 @@ func (dao Dao[T]) SelectOneById(id ...any) *T {
 	for i := 0; i < len(dao.modelMeta.allPKs); i++ {
 		builder = builder.Where(dao.modelMeta.allPKs[i].Key+"=?", id[i])
 	}
-	return builder.One()
+	return builder.OneCtx(ctx)
 }
 
 // SelectOneWithDelById 根据id获取，忽略逻辑删除
 func (dao Dao[T]) SelectOneWithDelById(id ...any) *T {
+	return dao.SelectOneWithDelByIdCtx(context.Background(), id...)
+}
+
+// SelectOneWithDelByIdCtx 带 ctx 的 SelectOneWithDelById。
+func (dao Dao[T]) SelectOneWithDelByIdCtx(ctx context.Context, id ...any) *T {
 	builder := dao.Select()
 	if len(id) != len(dao.modelMeta.allPKs) {
 		panic(exception.New("主键数量不匹配"))
@@ -276,32 +402,42 @@ func (dao Dao[T]) SelectOneWithDelById(id ...any) *T {
 	for i := 0; i < len(dao.modelMeta.allPKs); i++ {
 		builder = builder.Where(dao.modelMeta.allPKs[i].Key+"=?", id[i])
 	}
-	return builder.IgnoreLogicDel().One()
+	return builder.IgnoreLogicDel().OneCtx(ctx)
 }
 
 // SelectByIdsIgnoreDel S12: 根据id列表批量获取，忽略逻辑删除。
 // 仅支持单主键表。用于级联批量查询场景，避免 N+1。
 // ids 为空时返回 nil，不发 SQL。
 func (dao Dao[T]) SelectByIdsIgnoreDel(ids []int64) []*T {
+	return dao.SelectByIdsIgnoreDelCtx(context.Background(), ids)
+}
+
+// SelectByIdsIgnoreDelCtx 带 ctx 的 SelectByIdsIgnoreDel。
+func (dao Dao[T]) SelectByIdsIgnoreDelCtx(ctx context.Context, ids []int64) []*T {
 	if len(ids) == 0 {
 		return nil
 	}
 	if len(dao.modelMeta.allPKs) != 1 {
 		panic(exception.New("SelectByIdsIgnoreDel 仅支持单主键表"))
 	}
-	return dao.Select().WhereUnnestIn(dao.modelMeta.allPKs[0].OriKey, ids).IgnoreLogicDel().List()
+	return dao.Select().WhereUnnestIn(dao.modelMeta.allPKs[0].OriKey, ids).IgnoreLogicDel().ListCtx(ctx)
 }
 
 // SelectByIds S12: 根据id列表批量获取，计算逻辑删除。
 // 仅支持单主键表。ids 为空时返回 nil。
 func (dao Dao[T]) SelectByIds(ids []int64) []*T {
+	return dao.SelectByIdsCtx(context.Background(), ids)
+}
+
+// SelectByIdsCtx 带 ctx 的 SelectByIds。
+func (dao Dao[T]) SelectByIdsCtx(ctx context.Context, ids []int64) []*T {
 	if len(ids) == 0 {
 		return nil
 	}
 	if len(dao.modelMeta.allPKs) != 1 {
 		panic(exception.New("SelectByIds 仅支持单主键表"))
 	}
-	return dao.Select().WhereUnnestIn(dao.modelMeta.allPKs[0].OriKey, ids).List()
+	return dao.Select().WhereUnnestIn(dao.modelMeta.allPKs[0].OriKey, ids).ListCtx(ctx)
 }
 
 func (dao Dao[T]) CheckSchemaExist(schema string) bool {

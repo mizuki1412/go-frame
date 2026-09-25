@@ -17,6 +17,7 @@ type SelectDao[T any] struct {
 	builder        squirrel.SelectBuilder
 	fromAs         string // 别名 from用默认的
 	from           string // fromAs无效
+	fromSet        bool   // builder 上已落过 From（From/FromSubQuery），applyFrom 不再覆盖
 	ignoreLogicDel bool
 }
 
@@ -31,13 +32,26 @@ func (dao SelectDao[T]) Print() {
 }
 
 func (dao SelectDao[T]) sqlOriginPlaceholder() (string, []any) {
-	if dao.fromAs == "" {
-		dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource))
-	} else {
-		dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource, dao.fromAs))
-	}
+	dao = dao.applyFrom()
 	dao.builder = dao.builder.PlaceholderFormat(squirrel.Question)
 	return dao.builder.MustSql()
+}
+
+// applyFrom 把 From/FromAs/默认表名落到 builder 上。普通终结方法在 ToSql 阶段调用；
+// 子查询需要自带 FROM 的场景（FromSubQuery、InsertDao.Select 等）在组装时提前调用。
+// builder 上已落过 From（fromSet）时跳过，避免覆盖 FromSelect 的子查询表源。
+func (dao SelectDao[T]) applyFrom() SelectDao[T] {
+	if dao.fromSet {
+		return dao
+	}
+	if dao.from != "" {
+		dao.builder = dao.builder.From(dao.from)
+	} else if dao.fromAs != "" {
+		dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource, dao.fromAs))
+	} else {
+		dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource))
+	}
+	return dao
 }
 
 func (dao SelectDao[T]) Sql() (string, []any) {
@@ -48,15 +62,7 @@ func (dao SelectDao[T]) Sql() (string, []any) {
 	return sqls, args
 }
 func (dao SelectDao[T]) ToSql() (string, []any, error) {
-	if dao.from != "" {
-		dao.builder = dao.builder.From(dao.from)
-	} else {
-		if dao.fromAs == "" {
-			dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource))
-		} else {
-			dao.builder = dao.builder.From(dao.modelMeta.getTable(dao.dataSource, dao.fromAs))
-		}
-	}
+	dao = dao.applyFrom()
 	dao.builder = dao.builder.PlaceholderFormat(placeholder(dao.dataSource.Driver))
 	sqls, args, err := dao.builder.ToSql()
 	return sqls, argsWrap(dao.dataSource.Driver, args), err
@@ -97,14 +103,20 @@ func (dao SelectDao[T]) RemoveColumns() SelectDao[T] {
 }
 func (dao SelectDao[T]) From(from string) SelectDao[T] {
 	dao.from = from
+	dao.fromSet = true
+	dao.builder = dao.builder.From(from)
 	return dao
 }
 func (dao SelectDao[T]) FromAs(alias string) SelectDao[T] {
 	dao.fromAs = alias
 	return dao
 }
+// FromSubQuery 以子查询为 FROM 表。子查询先 applyFrom 保证自带 FROM 子句
+// （此前直接嵌入 builder，生成的子查询没有 FROM，SQL 非法）。
 func (dao SelectDao[T]) FromSubQuery(sub SelectDao[T], alias string) SelectDao[T] {
+	sub = sub.applyFrom()
 	dao.builder = dao.builder.FromSelect(sub.builder, alias)
+	dao.fromSet = true
 	return dao
 }
 
@@ -336,11 +348,12 @@ func (dao SelectDao[T]) WithRecursiveRaw(name string, columns []string, sqlBody 
 }
 
 // ============ S3: jsonb 谓词（防注入）============
-// WhereJsonbPathText 对 PG jsonb 字段做 text 路径比较：extend->>'key' = ?
-// key 会被 escapeName 转义，避免调用方 fmt.Sprintf 拼接引发的注入。
+// WhereJsonbPathText 对 PG jsonb 字段做 text 路径比较：extend->>? = ?
+// key 与值均参数化（此前 key 经 EscapeName 包裹成标识符 "key"，PG 上报
+// column "key" does not exist，且标识符引号不清洗内嵌引号存在注入面）。
 func (dao SelectDao[T]) WhereJsonbPathText(jsonbCol, key, op string, val any) SelectDao[T] {
 	col := dao.modelMeta.escapeName(dao.dataSource, jsonbCol)
-	return dao.Where(fmt.Sprintf("%s->>%s %s ?", col, dao.dataSource.EscapeName(key), op), val)
+	return dao.Where(fmt.Sprintf("%s->>? %s ?", col, op), key, val)
 }
 
 // WhereJsonbPathEq extend->>'key' = val 的快捷写法

@@ -1,6 +1,7 @@
 package sqlkit
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -15,7 +16,11 @@ import (
  */
 
 func (ds *DataSource) QueryOne(sql string, args ...any) any {
-	rows := ds.Query(sql, args)
+	return ds.QueryOneCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryOneCtx(ctx context.Context, sql string, args ...any) any {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	for rows.Next() {
 		ret, err := rows.SliceScan()
@@ -24,11 +29,18 @@ func (ds *DataSource) QueryOne(sql string, args ...any) any {
 		}
 		return ret[0]
 	}
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
+	}
 	return 0
 }
 
 func (ds *DataSource) QueryOneNumber(sql string, args ...any) int64 {
-	rows := ds.Query(sql, args)
+	return ds.QueryOneNumberCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryOneNumberCtx(ctx context.Context, sql string, args ...any) int64 {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	for rows.Next() {
 		ret, err := rows.SliceScan()
@@ -37,11 +49,18 @@ func (ds *DataSource) QueryOneNumber(sql string, args ...any) int64 {
 		}
 		return cast.ToInt64(ret[0])
 	}
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
+	}
 	return 0
 }
 
 func (ds *DataSource) QueryOneMap(sql string, args ...any) map[string]any {
-	rows := ds.Query(sql, args)
+	return ds.QueryOneMapCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryOneMapCtx(ctx context.Context, sql string, args ...any) map[string]any {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	for rows.Next() {
 		m := map[string]any{}
@@ -51,11 +70,18 @@ func (ds *DataSource) QueryOneMap(sql string, args ...any) map[string]any {
 		}
 		return m
 	}
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
+	}
 	return nil
 }
 
 func (ds *DataSource) QueryOneString(sql string, args ...any) string {
-	rows := ds.Query(sql, args)
+	return ds.QueryOneStringCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryOneStringCtx(ctx context.Context, sql string, args ...any) string {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	for rows.Next() {
 		ret, err := rows.SliceScan()
@@ -64,11 +90,18 @@ func (ds *DataSource) QueryOneString(sql string, args ...any) string {
 		}
 		return cast.ToString(ret[0])
 	}
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
+	}
 	return ""
 }
 
 func (ds *DataSource) QueryListMap(sql string, args ...any) []map[string]any {
-	rows := ds.Query(sql, args)
+	return ds.QueryListMapCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryListMapCtx(ctx context.Context, sql string, args ...any) []map[string]any {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	list := make([]map[string]any, 0, 5)
 	for rows.Next() {
@@ -79,11 +112,19 @@ func (ds *DataSource) QueryListMap(sql string, args ...any) []map[string]any {
 		}
 		list = append(list, m)
 	}
+	// 迭代错误检查：否则中途出错会静默返回部分数据
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
+	}
 	return list
 }
 
 func (ds *DataSource) QueryListString(sql string, args ...any) []string {
-	rows := ds.Query(sql, args)
+	return ds.QueryListStringCtx(context.Background(), sql, args...)
+}
+
+func (ds *DataSource) QueryListStringCtx(ctx context.Context, sql string, args ...any) []string {
+	rows := ds.QueryCtx(ctx, sql, args)
 	defer rows.Close()
 	list := make([]string, 0, 5)
 	for rows.Next() {
@@ -92,6 +133,10 @@ func (ds *DataSource) QueryListString(sql string, args ...any) []string {
 			panic(exception.New(err.Error()))
 		}
 		list = append(list, cast.ToString(ret[0]))
+	}
+	// 迭代错误检查：否则中途出错会静默返回部分数据
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
 	}
 	return list
 }
@@ -113,9 +158,10 @@ func (ds *DataSource) FormatRawValue(val any) string {
 	// todo 其他情况
 	switch val.(type) {
 	case string:
-		return "'" + val.(string) + "'"
+		// 字面量内的 ' 须双写转义，否则值含引号时破坏 SQL
+		return "'" + strings.ReplaceAll(val.(string), "'", "''") + "'"
 	case []uint8:
-		return "'" + string(val.([]uint8)) + "'"
+		return "'" + strings.ReplaceAll(string(val.([]uint8)), "'", "''") + "'"
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return cast.ToString(val)
 	case float32, float64:
@@ -129,7 +175,7 @@ func (ds *DataSource) FormatRawValue(val any) string {
 		}
 		return "'" + t.In(timekit.GetLocation()).Format(timekit.TimeLayout) + "'"
 	}
-	return "'" + cast.ToString(val) + "'"
+	return "'" + strings.ReplaceAll(cast.ToString(val), "'", "''") + "'"
 }
 
 // QueryColumnDef 获取表的列结构

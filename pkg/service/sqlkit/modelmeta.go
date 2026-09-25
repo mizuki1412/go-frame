@@ -2,7 +2,6 @@ package sqlkit
 
 import (
 	"reflect"
-	"strings"
 
 	"github.com/example/go-frame/pkg/class"
 	"github.com/example/go-frame/pkg/class/constraints"
@@ -21,6 +20,8 @@ type ModelMeta struct {
 	// 处理后的 keys array
 	// 用于 select 的 全量columns（已 escape，按 driver 生成）
 	allSelectColumns []string
+	// 与 allSelectColumns 一一对应的未 escape 列名，供 SelectEx/SelectPrefix 排除比对
+	allSelectOriKeys []string
 	allInsertKeys    []ModelMetaKey
 	allUpdateKeys    []ModelMetaKey
 	allPKs           []ModelMetaKey
@@ -51,7 +52,8 @@ type ModelMetaKey struct {
 
 func (th ModelMetaKey) val(rv reflect.Value, driver string) any {
 	var val any
-	v := rv.FieldByName(th.RStruct.Name)
+	// FieldByIndex 直取，避免 FieldByName 的线性查找（RStruct 即出自同一类型）
+	v := rv.FieldByIndex(th.RStruct.Index)
 	if v.IsValid() {
 		val = v.Interface()
 	}
@@ -138,6 +140,7 @@ func (th ModelMeta) init(obj any, ds *DataSource) ModelMeta {
 	// 处理
 	for _, e := range th.keys {
 		th.allSelectColumns = append(th.allSelectColumns, e.Key)
+		th.allSelectOriKeys = append(th.allSelectOriKeys, e.OriKey)
 		if e.Primary {
 			th.allPKs = append(th.allPKs, e)
 		}
@@ -150,6 +153,7 @@ func (th ModelMeta) init(obj any, ds *DataSource) ModelMeta {
 	}
 	if th.logicDelKey.OriKey != "" {
 		th.allSelectColumns = append(th.allSelectColumns, th.logicDelKey.Key)
+		th.allSelectOriKeys = append(th.allSelectOriKeys, th.logicDelKey.OriKey)
 		th.allUpdateKeys = append(th.allUpdateKeys, th.logicDelKey)
 	}
 	th.driver = ds.Driver
@@ -194,10 +198,14 @@ func (th ModelMeta) getSelectColumnsWithPrefix(prefix string, excludes ...string
 	}
 	arr := make([]string, 0, len(th.allSelectColumns))
 	if len(excludes) > 0 {
-		ex := strings.Join(excludes, ";")
-		ex += ";"
-		for _, e := range th.allSelectColumns {
-			if !strings.Contains(ex, e+";") {
+		// excludes 是调用方传入的未 escape 字段名，须与 OriKey 比对；
+		// allSelectColumns 是 escape 后的列名，直接比对永远不命中
+		ex := make(map[string]struct{}, len(excludes))
+		for _, e := range excludes {
+			ex[e] = struct{}{}
+		}
+		for i, e := range th.allSelectColumns {
+			if _, ok := ex[th.allSelectOriKeys[i]]; !ok {
 				arr = append(arr, prefix+e)
 			}
 		}

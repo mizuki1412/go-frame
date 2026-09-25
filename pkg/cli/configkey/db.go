@@ -17,3 +17,5 @@ const DBMaxOpen = "db.maxOpen"
 const DBMaxIdle = "db.maxIdle"
 
 const DBMaxLife = "db.maxLife"
+
+const DBSSLMode = "db.sslMode"

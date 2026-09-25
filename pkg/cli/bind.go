@@ -104,6 +104,7 @@ func bindDefaultFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Int(configkey.DBMaxOpen, 25, "最大连接")
 	cmd.PersistentFlags().Int(configkey.DBMaxIdle, 5, "最大空闲连接")
 	cmd.PersistentFlags().Int(configkey.DBMaxLife, 10, "单位/分钟")
+	cmd.PersistentFlags().String(configkey.DBSSLMode, "disable", "PG/Kingbase 的 sslmode（disable/require/verify-ca/verify-full）")
 
 	cmd.PersistentFlags().String(configkey.OpenApiDescription, "openapi doc", "")
 	cmd.PersistentFlags().String(configkey.OpenApiTitle, "openapi doc", "")

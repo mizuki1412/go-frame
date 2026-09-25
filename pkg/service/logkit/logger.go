@@ -3,6 +3,7 @@ package logkit
 // logger的抽象
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -90,6 +91,13 @@ func Debug(msg string, args ...any) {
 	if fileLogger != nil {
 		fileLogger.Debug(msg, args...)
 	}
+}
+
+// DebugEnabled 当前日志级别是否输出 Debug。供调用方在拼装昂贵日志参数
+// （如 args 的 JSON 序列化）之前短路，避免级别不够时白白付出序列化开销。
+func DebugEnabled() bool {
+	Init()
+	return slog.Default().Enabled(context.Background(), slog.LevelDebug)
 }
 func Info(msg string, args ...any) {
 	slog.Info(msg, args...)

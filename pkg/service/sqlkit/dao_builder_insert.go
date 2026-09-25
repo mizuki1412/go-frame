@@ -1,6 +1,8 @@
 package sqlkit
 
 import (
+	"context"
+
 	"github.com/Masterminds/squirrel"
 	"github.com/example/go-frame/pkg/class/exception"
 	"github.com/example/go-frame/pkg/library/jsonkit"
@@ -18,7 +20,13 @@ func (dao InsertDao[T]) Print() {
 }
 
 func (dao InsertDao[T]) Exec() int64 {
-	res := dao.ExecRaw(dao.Sql())
+	return dao.ExecCtx(context.Background())
+}
+
+// ExecCtx 带 ctx 的执行，支持超时与取消传播。
+func (dao InsertDao[T]) ExecCtx(ctx context.Context) int64 {
+	sql, args := dao.Sql()
+	res := dao.ExecRawCtx(ctx, sql, args)
 	rn, _ := res.RowsAffected()
 	logkit.Debug("sql res", "rows", rn)
 	return rn
@@ -30,7 +38,13 @@ func (dao InsertDao[T]) ExecRows() int64 {
 }
 
 func (dao InsertDao[T]) ReturnOne(dest *T) {
-	rows := dao.QueryRaw(dao.Sql())
+	dao.ReturnOneCtx(context.Background(), dest)
+}
+
+// ReturnOneCtx 带 ctx 的 RETURNING 扫描，支持超时与取消传播。
+func (dao InsertDao[T]) ReturnOneCtx(ctx context.Context, dest *T) {
+	sql, args := dao.Sql()
+	rows := dao.QueryRawCtx(ctx, sql, args)
 	defer rows.Close()
 	for rows.Next() {
 		// return 赋值
@@ -39,6 +53,9 @@ func (dao InsertDao[T]) ReturnOne(dest *T) {
 			panic(exception.New(err.Error()))
 		}
 		break
+	}
+	if err := rows.Err(); err != nil {
+		panic(exception.New(err.Error()))
 	}
 }
 
@@ -90,7 +107,10 @@ func (dao InsertDao[T]) Values(values ...any) InsertDao[T] {
 	return dao
 }
 
+// Select 以子查询为插入源（insert into t select ...）。子查询先 applyFrom
+// 保证自带 FROM 子句（此前直接嵌入 builder，生成的子查询没有 FROM，SQL 非法）。
 func (dao InsertDao[T]) Select(sb SelectDao[T]) InsertDao[T] {
-	dao.builder = dao.builder.Values(sb.builder)
+	sb = sb.applyFrom()
+	dao.builder = dao.builder.Select(sb.builder)
 	return dao
 }

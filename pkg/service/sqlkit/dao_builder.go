@@ -2,6 +2,7 @@ package sqlkit
 
 import (
 	"github.com/Masterminds/squirrel"
+	"github.com/example/go-frame/pkg/class/const/sqlconst"
 	"github.com/example/go-frame/pkg/class/exception"
 )
 
@@ -96,6 +97,10 @@ func (dao Dao[T]) Insert() InsertDao[T] {
 func (dao Dao[T]) Replace() InsertDao[T] {
 	if dao.modelMeta.tableName == "" {
 		panic(exception.New("sqlbuilder modelmeta null"))
+	}
+	// REPLACE INTO 语法仅 MySQL/SQLite 支持，其他驱动提前报错而非生成非法 SQL
+	if dao.dataSource.Driver != sqlconst.Mysql && dao.dataSource.Driver != sqlconst.Sqlite3 {
+		panic(exception.New("Replace 仅支持 MySQL/SQLite，其他驱动请用 UpsertObj/InsertObjIgnoreConflict"))
 	}
 	d := InsertDao[T]{
 		builder: squirrel.Replace(dao.modelMeta.getTable(dao.dataSource)),

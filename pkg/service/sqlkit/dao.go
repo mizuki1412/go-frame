@@ -1,6 +1,7 @@
 package sqlkit
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/example/go-frame/pkg/class/const/sqlconst"
@@ -57,17 +58,30 @@ func (dao Dao[T]) DataSource() *DataSource {
 }
 
 func (dao Dao[T]) QueryRaw(sql string, args []any) *sqlx.Rows {
-	logkit.Debug("sql req", "sql", sql, "args", jsonkit.ToString(args))
-	return dao.dataSource.Query(sql, args)
+	return dao.QueryRawCtx(context.Background(), sql, args)
+}
+
+// QueryRawCtx 带 ctx 的原始查询，支持超时与取消传播。
+func (dao Dao[T]) QueryRawCtx(ctx context.Context, sql string, args []any) *sqlx.Rows {
+	// args 的 JSON 序列化较贵，级别不够时短路
+	if logkit.DebugEnabled() {
+		logkit.Debug("sql req", "sql", sql, "args", jsonkit.ToString(args))
+	}
+	return dao.dataSource.QueryCtx(ctx, sql, args)
 }
 
 // QueryRawRows 默认返回 T list，可用于自由sql时，自定义返回值
 func (dao Dao[T]) QueryRawRows(sql string, args []any) []*T {
-	rows := dao.QueryRaw(sql, args)
+	return dao.QueryRawRowsCtx(context.Background(), sql, args)
+}
+
+// QueryRawRowsCtx 带 ctx 的 QueryRawRows。
+func (dao Dao[T]) QueryRawRowsCtx(ctx context.Context, sql string, args []any) []*T {
+	rows := dao.QueryRawCtx(ctx, sql, args)
 	list := make([]*T, 0, 5)
 	defer rows.Close()
 	for rows.Next() {
-		list = append(list, scanStruct[T](rows, dao.dataSource.Driver))
+		list = append(list, scanStruct[T](rows, dao.dataSource.Driver, dao.modelMeta))
 	}
 	if err := rows.Err(); err != nil {
 		panic(exception.New(err.Error()))
@@ -77,8 +91,15 @@ func (dao Dao[T]) QueryRawRows(sql string, args []any) []*T {
 }
 
 func (dao Dao[T]) ExecRaw(sql string, args []any) sql.Result {
-	logkit.Debug("sql exec", "sql", sql, "args", jsonkit.ToString(args))
-	return dao.dataSource.Exec(sql, args)
+	return dao.ExecRawCtx(context.Background(), sql, args)
+}
+
+// ExecRawCtx 带 ctx 的原始执行，支持超时与取消传播。
+func (dao Dao[T]) ExecRawCtx(ctx context.Context, sql string, args []any) sql.Result {
+	if logkit.DebugEnabled() {
+		logkit.Debug("sql exec", "sql", sql, "args", jsonkit.ToString(args))
+	}
+	return dao.dataSource.ExecCtx(ctx, sql, args)
 }
 
 func (dao Dao[T]) GetOriginDB() *sqlx.DB {
@@ -146,7 +167,8 @@ func (dao Dao[T]) WithCascadeOpts(opts any, f CascadeFunc[T]) Dao[T] {
 type CascadeBatchFunc[T any] func(list []*T, ctx CascadeCtx)
 
 // WithCascadeBatch S12: 替换 dao 的批量级联函数，优先于 WithCascade 设置的 Cascade 使用。
-// One/QueryRawRows 在 list 长度>1 时走批量路径；长度==1 时回退到单条 Cascade 避免空切片开销。
+// List/QueryRawRows 在 list 长度>1 时走批量路径；长度==1 时若同时设置了 Cascade 则走单条，
+// 否则仍走批量（批量函数内部自行处理单元素列表）。
 func (dao Dao[T]) WithCascadeBatch(f CascadeBatchFunc[T]) Dao[T] {
 	dao.CascadeBatch = func(list []*T) {
 		f(list, CascadeCtx{Ds: dao.dataSource})
@@ -163,13 +185,14 @@ func (dao Dao[T]) WithCascadeBatchOpts(opts any, f CascadeBatchFunc[T]) Dao[T] {
 	return dao
 }
 
-// cascadeList 统一执行级联策略：list 长度>1 且设置了 CascadeBatch 时走批量；
-// 否则回退到逐条 Cascade。One 路径不应调用此函数。
+// cascadeList 统一执行级联策略：设置了 CascadeBatch 时优先走批量（含单条 list，
+// 仅当同时设置了 Cascade 才回退单条）；否则回退到逐条 Cascade。
+// One 路径不应调用此函数。
 func cascadeList[T any](dao Dao[T], list []*T) {
 	if len(list) == 0 {
 		return
 	}
-	if dao.CascadeBatch != nil && len(list) > 1 {
+	if dao.CascadeBatch != nil && (len(list) > 1 || dao.Cascade == nil) {
 		dao.CascadeBatch(list)
 		return
 	}
