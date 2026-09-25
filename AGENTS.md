@@ -8,12 +8,12 @@ Go scaffold for vibe-coding REST services (gin + viper + cobra + sqlx/squirrel +
 
 ## Current state (verified)
 
-- Build, vet and tests all green (verified 2026-09-21, after `go mod tidy` filled in the go.sum entries for the new eino deps). The required verification for every change is:
+- Build, vet and tests all green (verified 2026-09-25, after the sqlkit refactor: 全链路 ctx 变体、UpsertObj、InsertBatch 分片、jsonb key 参数化、SelectEx/FromSubQuery 修复). The required verification for every change is:
   ```
   go build ./... && go vet ./... && gofmt -l . && go test ./...
   ```
   Caveat: on a Windows checkout with `core.autocrlf=true`, `gofmt -l .` lists nearly every file because files are CRLF on disk (repo stores LF). `gofmt -d` shows content-identical diffs — treat that as clean; only real formatting diffs count.
-- Tests: pkg infra (`pkg/class`, `pkg/library/cmdkit`, `pkg/library/cryptokit`, `pkg/library/framekit`, `pkg/service/tokenkit`, …) plus `agent/runtime/sessionstore` and `pkg/cli` (bind_agent_test); no `mod/` tests, no lint config, no CI.
+- Tests: pkg infra (`pkg/class`, `pkg/library/cmdkit`, `pkg/library/cryptokit`, `pkg/library/framekit`, `pkg/service/tokenkit`, `pkg/service/sqlkit`（免 DB 的 SQL 生成单测）, …) plus `agent/runtime/sessionstore` and `pkg/cli` (bind_agent_test); no `mod/` tests, no lint config, no CI.
 - Module path `github.com/example/go-frame` and project name `go-frame` are placeholders; rename (go.mod module path + import prefixes, at minimum) before reuse.
 - Go toolchain: go 1.27.0 (go.mod `go 1.27.0`).
 - Business modules: `mod/user/`. Agent runtime lives outside `mod/` in `agent/` (infra-like, may not be imported by `mod/*`).
@@ -56,6 +56,7 @@ main.go                       # cli.RootCMD(...) → user.Init()（注册权限�
 
 - Every key is a `const` in `pkg/cli/configkey/*.go`, bound as cobra flag in `pkg/cli/bind.go`, read via `configkit.GetString/GetInt/GetBool(key, default...)` — never read viper directly.
 - Defaults: `:10000` for REST server; `/v3/api-docs` serves the OpenAPI JSON (no bundled UI). REST 另有 `rest.requestBodySize`（请求体上限 MB，默认 32，0 不限制，经 `middleware.MaxBody` 接线）与 `rest.logRequestBody`（请求参数 info 级日志开关，默认 true，pwd/password/passwd 自动掩码）。
+- DB 另有 `db.sslMode`（PG/Kingbase sslmode：disable/require/verify-ca/verify-full，默认 disable；MySQL DSN 固定 utf8mb4，loc 取 timekit 时区）。
 - Config file: `config.yaml` in working dir, override with `-c/--config`.
 - Env placeholders: after `ReadInConfig`, `loadConfig` expands `${ENV_NAME}` in string config values to `os.Getenv(ENV_NAME)`; unset vars expand to empty string (2026-09-19, VERSION 20260919).
 - Key families (each in its own `configkey/*.go`): rest/db/token/redis/... plus the agent stack:
@@ -97,6 +98,14 @@ var OptsDefault = CascadeOpts{Role: true, Department: true}
 // New registers cascades via dao.WithCascadeOpts(opts, func(obj *T, ctx sqlkit.CascadeCtx) { ... })
 ```
 Batch strategy with `WithCascadeBatchLinks` to avoid N+1. No byte enums.
+
+### sqlkit 数据访问 (pkg/service/sqlkit)
+
+- 全链路提供 `*context.Context` 的 `Ctx` 后缀变体（`OneCtx/ListCtx/PageCtx/CountCtx/ExecCtx/QueryRawCtx/SelectOneByIdCtx/...`）；无 ctx 的老方法等价于 `context.Background()`，REST/异步场景需要超时与取消传播时用 Ctx 变体。
+- `UpsertObj(dest, conflictCols...)`：PG/SQLite 走 `ON CONFLICT(...) DO UPDATE`、MySQL 走 `ON DUPLICATE KEY UPDATE`，更新列为全部可更新列减主键/自增/冲突列；`Replace()` 仅 MySQL/SQLite（其他驱动提前 panic）。`InsertBatch` 按列数自动分片（单语句参数 ≤32768，防 PG 65535 协议上限），无需手动分批。
+- `WhereJsonbPathText/Eq` 的 key 与值均已参数化，key 可直接接用户输入（此前 key 被包成标识符，PG 上报 column not exist）；`SelectEx/SelectPrefix` 的排除参数传未转义字段名。
+- 昂贵 debug 日志参数（如 args 的 JSON 序列化）用 `logkit.DebugEnabled()` 先判级再拼装，勿在调用点无条件求值。
+- `WithSchema` 的拷贝持有创建那一刻的 TX 快照：在父 ds `BeginTX` 之前创建则其读写不进父事务，需要事务时先 BeginTX 再 WithSchema。
 
 ### Routing + OpenAPI
 
