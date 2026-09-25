@@ -123,6 +123,17 @@ func ZRevRange(ctx context.Context, key string, start, stop int64) []ZEntry {
 	return entries
 }
 
+// ZScore 返回成员的 score，成员不存在时 ok=false。
+// 在线会话的「最后活跃时间」以在线索引 score 为权威，读取即用此实现。
+func ZScore(ctx context.Context, key string, member string) (score float64, ok bool) {
+	c := Instance()
+	v, err := c.ZScore(ctx, key, member).Result()
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // ZRemRangeByScore 移除 score 落在 [min, max] 的成员，返回移除数。
 // 用于清理在线列表里「最后活跃时间早于过期窗口」的僵尸成员。
 func ZRemRangeByScore(ctx context.Context, key string, min, max float64) int64 {

@@ -92,18 +92,17 @@ func AuthDept(deptIds ...int64) router.Handler {
 // authenticate 校验登录态与 token 域，通过则滑动续期；失败直接写 401 并 Abort。
 // 返回 false 表示请求已被终结，调用方必须立即 return。
 func authenticate(ctx *context.Context, scopes ...string) bool {
-	// Refresh 内部会先做存在性/过期判定，并顺带重置 TTL 与在线索引，
-	// 一步到位，避免「先 Parse 再单独续期」两次打存储。
-	if !tokenkit.Refresh(ctx.GetToken()) {
+	// Refresh 内部先 Parse 做存在性/过期判定，返回的会话直接缓存进请求上下文，
+	// 后续 GetSession（域校验、取 uid 等）不再二次打存储
+	s, ok := tokenkit.Refresh(ctx.GetToken())
+	if !ok {
 		deny(ctx, "登录失效")
 		return false
 	}
-	if len(scopes) > 0 {
-		s := ctx.GetSession()
-		if s == nil || !slices.Contains(scopes, s.Scope) {
-			deny(ctx, "登录状态域不匹配，请从对应入口登录")
-			return false
-		}
+	ctx.CacheSession(s)
+	if len(scopes) > 0 && !slices.Contains(scopes, s.Scope) {
+		deny(ctx, "登录状态域不匹配，请从对应入口登录")
+		return false
 	}
 	return true
 }

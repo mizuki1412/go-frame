@@ -1,12 +1,14 @@
 package context
 
 import (
-	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+
 	"github.com/example/go-frame/pkg/service/logkit"
 	"github.com/example/go-frame/pkg/service/storagekit"
 	"github.com/gin-gonic/gin/render"
-	"net/http"
-	"net/url"
 )
 
 type RestRet struct {
@@ -83,7 +85,20 @@ func (ctx *Context) JsonErrorCode(code int, msg string) {
 }
 
 func (ctx *Context) SetFileHeader(filename string) {
-	ctx.Proxy.Header("Content-Disposition", "attachment; filename="+url.QueryEscape(filename))
+	// RFC 5987/6266：非 ASCII 文件名用 filename* 透传 UTF-8，filename 给不识别该
+	// 语法的旧客户端回退。原先用 url.QueryEscape 有两个问题：空格被编码成 '+'，
+	// 浏览器下载的文件名会真的显示加号；中文名依赖单字段转义，兼容性差。
+	fallback := strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			return -1
+		}
+		return r
+	}, filename)
+	if fallback == "" {
+		fallback = "download"
+	}
+	ctx.Proxy.Header("Content-Disposition",
+		"attachment; filename="+strconv.Quote(fallback)+"; filename*=UTF-8''"+url.PathEscape(filename))
 	ctx.Proxy.Header("Content-Type", "application/octet-stream")
 	ctx.Proxy.Header("Content-Transfer-Encoding", "binary")
 	ctx.Proxy.Header("Pragma", "No-cache")
@@ -111,11 +126,21 @@ func (ctx *Context) FileDirect(obsolutePath, name string) {
 	ctx.Proxy.File(obsolutePath + name)
 }
 
+// SendSSE 发送一条 SSE 事件帧。msg 含换行时按 SSE 规范拆成多个 data: 行——
+// 帧内不允许裸换行，原样写入会把一条消息撕成多条残缺事件。
 func (ctx *Context) SendSSE(msg string) {
 	ctx.Proxy.Header("Content-Type", "text/event-stream")
 	ctx.Proxy.Header("Cache-Control", "no-cache")
 	ctx.Proxy.Header("Connection", "keep-alive")
-	_, err := ctx.Proxy.Writer.WriteString(fmt.Sprintf("event: message\ndata: %s\n\n", msg))
+	var b strings.Builder
+	b.WriteString("event: message\n")
+	for _, line := range strings.Split(strings.ReplaceAll(msg, "\r\n", "\n"), "\n") {
+		b.WriteString("data: ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	_, err := ctx.Proxy.Writer.WriteString(b.String())
 	if err != nil {
 		logkit.Error(err.Error())
 		return

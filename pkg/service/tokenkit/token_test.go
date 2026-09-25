@@ -85,7 +85,7 @@ func TestAbsoluteExpireNotExtendableByRefresh(t *testing.T) {
 	s.LoginTime = time.Now().Add(-ExpireTtl() - time.Hour)
 	getStore().set(keySessionPrefix+token, []byte(marshal(s)), IdleTtl())
 
-	if Refresh(token) {
+	if _, ok := Refresh(token); ok {
 		t.Error("超出绝对上限的会话不应续期成功")
 	}
 	if got := Parse(token); got != nil {
@@ -155,17 +155,49 @@ func TestSingleLoginKicksPreviousSessions(t *testing.T) {
 func TestRefreshUpdatesLastActive(t *testing.T) {
 	newTestTokenkit(t)
 	token := Create("3")
-	before := Parse(token).LastActive
+	before := LastActive(token)
 	time.Sleep(1100 * time.Millisecond)
-	if !Refresh(token) {
+	s, ok := Refresh(token)
+	if !ok {
 		t.Fatal("Refresh 应成功")
 	}
-	after := Parse(token).LastActive
-	if !after.After(before) {
-		t.Errorf("LastActive 未推进: before=%s after=%s", before, after)
+	if !s.LastActive.After(before) {
+		t.Errorf("Refresh 返回的会话 LastActive 未推进: before=%s after=%s", before, s.LastActive)
 	}
-	if got := LastActive(token); !got.Equal(after) {
-		t.Errorf("LastActive = %s, want %s", got, after)
+	// LastActive 的实时权威在在线索引 score，Refresh 必须推进它
+	if got := LastActive(token); !got.After(before) {
+		t.Errorf("在线索引 LastActive 未推进: %s", got)
+	}
+}
+
+// 写节流：距上次落库不足空闲窗口一半时，Refresh 只推进在线索引 score，
+// 不重写会话记录（记录里的 LastActive 允许滞后）。
+func TestRefreshThrottlesRecordWrite(t *testing.T) {
+	newTestTokenkit(t)
+	token := Create("3")
+	before := Parse(token).LastActive
+	time.Sleep(1100 * time.Millisecond)
+	if _, ok := Refresh(token); !ok {
+		t.Fatal("Refresh 应成功")
+	}
+	if after := Parse(token).LastActive; !after.Equal(before) {
+		t.Errorf("窗口内不应重写会话记录: before=%s after=%s", before, after)
+	}
+}
+
+// 距上次落库超过空闲窗口一半时，Refresh 必须重写会话记录（顺带拉满 TTL）。
+func TestRefreshRewritesRecordBeyondHalfWindow(t *testing.T) {
+	newTestTokenkit(t)
+	token := Create("3")
+	s := Parse(token)
+	// 空闲窗口默认 168h，把记录的 LastActive 拨到窗口一半之前，模拟久未落库
+	s.LastActive = time.Now().Add(-IdleTtl() - time.Minute)
+	getStore().set(keySessionPrefix+token, []byte(marshal(s)), IdleTtl())
+	if _, ok := Refresh(token); !ok {
+		t.Fatal("Refresh 应成功")
+	}
+	if after := Parse(token).LastActive; time.Since(after) > time.Minute {
+		t.Errorf("超窗口一半应重写会话记录: LastActive=%s", after)
 	}
 }
 
@@ -199,7 +231,7 @@ func TestListOnlinePaging(t *testing.T) {
 	}
 	// 逆序 Refresh 且每次间隔 5ms：最后刷新的 tokens[0] 最新，倒序即正序
 	for i := len(tokens) - 1; i >= 0; i-- {
-		Refresh(tokens[i])
+		_, _ = Refresh(tokens[i])
 		time.Sleep(5 * time.Millisecond)
 	}
 	page1, total := ListOnline(0, 2)

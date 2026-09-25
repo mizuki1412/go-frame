@@ -60,6 +60,13 @@ func Init() {
 	})
 }
 
+// ConsoleEnabled 控制台输出是否开启（log.console，默认 true）。
+// 供访问日志这类需要「控制台彩色单行」的场景判定，避免绕过开关直写 stderr。
+func ConsoleEnabled() bool {
+	Init()
+	return consoleEnabled
+}
+
 func getRollWriter() io.Writer {
 	filename := configkit.GetString(configkey.LogName)
 	filepath := configkit.GetString(configkey.LogPath)

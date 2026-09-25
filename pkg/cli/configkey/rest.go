@@ -6,8 +6,11 @@ const RestServerPort = "rest.port"
 // RestServerBase base path
 const RestServerBase = "rest.base"
 
-// RestRequestBodySize 单位MB
+// RestRequestBodySize 请求体大小上限，单位MB；0 表示不限制
 const RestRequestBodySize = "rest.requestBodySize"
+
+// RestLogRequestBody 是否打印请求参数（info 级，密码等敏感字段自动掩码）；默认 true
+const RestLogRequestBody = "rest.logRequestBody"
 
 // RestPPROF 是否开启rest server 的pprof接口： /debug/pprof
 const RestPPROF = "rest.pprof"

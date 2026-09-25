@@ -53,6 +53,12 @@ func (ctx *Context) GetToken() string {
 	return ctx.ReadToken()
 }
 
+// CacheSession 把已解析的会话缓存进请求上下文，供 GetSession 复用，
+// 避免鉴权中间件 Refresh 拿到会话后同请求内再次打存储解析。
+func (ctx *Context) CacheSession(s *tokenkit.Session) {
+	ctx.Set(ctxKeySession, s)
+}
+
 // GetSession 解析并返回当前登录会话，无效会话（不存在/已过期/已剔出）返回 nil。
 // 解析结果缓存在请求上下文中，多次调用只打一次存储。
 //
@@ -100,7 +106,8 @@ func (ctx *Context) RefreshToken() bool {
 	if token == "" {
 		return false
 	}
-	return tokenkit.Refresh(token)
+	_, ok := tokenkit.Refresh(token)
+	return ok
 }
 
 // DestroyToken 销毁当前会话（登出），并清掉请求内的缓存。

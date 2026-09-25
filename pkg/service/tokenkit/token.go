@@ -8,11 +8,11 @@
 //
 // 存储布局（逻辑 key，redis 后端会自动加 redis.prefix）：
 //
-//	tk:t:<token>  STRING  会话 JSON，TTL = IdleTtl
+//	tk:t:<token>  STRING  会话 JSON，TTL = IdleTtl（滑动续期按空闲窗口一半节流，见 Refresh）
 //	tk:u:<uid>    SET     该用户当前在线的 token 集合
-//	tk:online     ZSET    全局在线索引，member=token，score=最后活跃时间（毫秒）
+//	tk:online     ZSET    全局在线索引，member=token，score=最后活跃时间（毫秒，实时权威）
 //
-// 两道独立过期闸门：IdleTtl 管「多久没动」（每次鉴权重置，滑动续期），
+// 两道独立过期闸门：IdleTtl 管「多久没动」（鉴权滑动续期），
 // ExpireTtl 管「总共能活多久」（以 LoginTime 为起点，滑动续期无法延长）。
 //
 // 用户 id 一律用 **string**：tokenkit 只把 id 当不透明标识用于建索引与传参，
@@ -153,23 +153,35 @@ func Parse(token string) *Session {
 	return s
 }
 
-// Refresh 滑动续期：更新 LastActive、刷新 TTL、维护在线索引。
-// 会话不存在/已超绝对上限时返回 false。
-func Refresh(token string) bool {
+// Refresh 滑动续期：推进在线索引的最后活跃时间；返回解析出的会话与是否成功。
+// 会话不存在/已超绝对上限时返回 (nil, false)。
+//
+// 写节流：会话记录（tk:t:）距上次落库不足空闲窗口一半时**不重写**（连 TTL 也不动——
+// 活跃会话的 key 始终保有 ≥ 窗口一半的余量，不会中途过期），超过一半才整体重写并拉满 TTL。
+// 由此把每请求的存储开销从「1 读 + 3 写」压到常规情况下的「1 读 + 1 写」；
+// 代价是记录里的 LastActive 允许 idle/2 的滞后，**实时权威在在线索引的 score**，
+// 展示类读取（LastActive/ListOnline/ListOnlineOf）一律走 score。
+// 原 token 已在 Create 时写入用户索引，此处不再重复 sadd。
+func Refresh(token string) (*Session, bool) {
 	s := Parse(token)
 	if s == nil {
-		return false
+		return nil, false
 	}
-	s.LastActive = time.Now()
-	store := getStore()
-	store.set(keySessionPrefix+token, []byte(jsonkit.ToString(s)), IdleTtl())
-	store.sadd(keyUserPrefix+s.UserId, token)
-	store.zadd(keyOnline, float64(s.LastActive.UnixMilli()), token)
-	return true
+	now := time.Now()
+	if now.Sub(s.LastActive) >= IdleTtl()/2 {
+		s.LastActive = now
+		getStore().set(keySessionPrefix+token, []byte(jsonkit.ToString(s)), IdleTtl())
+	}
+	getStore().zadd(keyOnline, float64(now.UnixMilli()), token)
+	return s, true
 }
 
 // LastActive 返回会话最近活跃时刻，会话不存在返回零值。
+// 以在线索引 score 为准（实时）；索引缺失时回读会话记录兜底（可能有 idle/2 滞后）。
 func LastActive(token string) time.Time {
+	if score, ok := getStore().zscore(keyOnline, token); ok {
+		return time.UnixMilli(int64(score))
+	}
 	s := Parse(token)
 	if s == nil {
 		return time.Time{}
@@ -261,7 +273,10 @@ func ListOnline(offset, limit int) ([]Online, int64) {
 			store.zrem(keyOnline, e.Member)
 			continue
 		}
-		out = append(out, Online{Session: *s, Token: e.Member})
+		o := Online{Session: *s, Token: e.Member}
+		// LastActive 以在线索引 score 为权威（会话记录因写节流允许 idle/2 滞后）
+		o.LastActive = time.UnixMilli(int64(e.Score))
+		out = append(out, o)
 	}
 	return out, total
 }
@@ -273,6 +288,12 @@ func ListOnlineOf(userId string) []Online {
 	for _, t := range tokens {
 		if s := Parse(t); s != nil {
 			out = append(out, Online{Session: *s, Token: t})
+		}
+	}
+	// 同 ListOnline：LastActive 以在线索引 score 为权威
+	for i := range out {
+		if score, ok := getStore().zscore(keyOnline, out[i].Token); ok {
+			out[i].LastActive = time.UnixMilli(int64(score))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastActive.After(out[j].LastActive) })

@@ -31,6 +31,8 @@ type store interface {
 	srem(key string, members ...string)
 	smembers(key string) []string
 	zadd(key string, score float64, member string)
+	// zscore 返回成员的 score，成员不存在时 ok=false。
+	zscore(key string, member string) (score float64, ok bool)
 	zrem(key string, members ...string)
 	// zrevrange 按 score 倒序返回 [start, stop] 区间，-1 表示到末尾。
 	zrevrange(key string, start, stop int64) []scored
@@ -105,6 +107,10 @@ func (s *redisStore) smembers(key string) []string {
 
 func (s *redisStore) zadd(key string, score float64, member string) {
 	rediskit.ZAdd(redisCtx, s.key(key), score, member)
+}
+
+func (s *redisStore) zscore(key string, member string) (float64, bool) {
+	return rediskit.ZScore(redisCtx, s.key(key), member)
 }
 
 func (s *redisStore) zrem(key string, members ...string) {
@@ -246,6 +252,17 @@ func (m *memoryStore) zadd(key string, score float64, member string) {
 		e.zset = make(map[string]float64)
 	}
 	e.zset[member] = score
+}
+
+func (m *memoryStore) zscore(key string, member string) (float64, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.entries[key]
+	if !ok || !e.alive(time.Now()) {
+		return 0, false
+	}
+	score, ok := e.zset[member]
+	return score, ok
 }
 
 func (m *memoryStore) zrem(key string, members ...string) {

@@ -25,14 +25,16 @@ func Recover() router.Handler {
 				var msg string
 				var code = exception.CodeNone
 				var e exception.Exception
+				// panic 日志带上 url/method，与访问日志可按请求关联
+				loc := []any{"url", ctx.Request.URL.Path, "method", ctx.Request.Method}
 				if errors.As(errToError(err), &e) {
 					msg = e.Msg
 					code = e.Code
 					// 带代码位置信息
-					logkit.ErrorException(e)
+					logkit.ErrorException(e, loc...)
 				} else {
 					msg = cast.ToString(err)
-					logkit.ErrorException(exception.New(msg, 3))
+					logkit.ErrorException(exception.New(msg, 3), loc...)
 				}
 				if !ctx.Proxy.Writer.Written() {
 					if code == exception.CodeNone || code == context.ResultErr {

@@ -63,6 +63,11 @@ func defaultEngine() {
 	router.Use(middleware.Log())
 	router.Use(middleware.Cors())
 	router.Use(middleware.Recover())
+	// 请求体大小上限（rest.requestBodySize，MB，0 不限制）：
+	// 防异常/恶意客户端无上限占用内存；须在业务路由前挂载
+	if mb := configkit.GetInt(configkey.RestRequestBodySize, 32); mb > 0 {
+		router.Use(middleware.MaxBody(int64(mb) << 20))
+	}
 	if configkit.GetBool(configkey.RestPPROF) {
 		// P2 修复：原开关为空实现（死开关），接通 pprof 挂载。
 		// pprof 端点暴露运行时内部信息（堆、goroutine 栈等），仅开发/内网诊断时开启。
@@ -138,12 +143,13 @@ func Run(listeners ...net.Listener) error {
 	// Wait for interrupt signal to gracefully shutdown the server with
 	// a timeout of 5 seconds.
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, os.Interrupt, syscall.SIGTERM)
+	// os.Interrupt 与 SIGINT 是同一信号，重复注册无意义
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 	return shutdown()
 }
 
-// Shutdown 主动关停（与 Run 的信号触发关闭等价：先执行业务清理，再关停 HTTP server）。
+// Shutdown 主动关停（与 Run 的信号触发关闭等价：先排空 HTTP 在途请求，再执行业务清理）。
 func Shutdown() {
 	_ = shutdown()
 }
@@ -154,10 +160,15 @@ func shutdown() error {
 	}
 	logkit.Info("Shutting down server...")
 
-	ctxt, cancel := ctx.WithTimeout(ctx.Background(), 5*time.Second)
-	defer cancel()
-	CustomShutdownLogic(ctxt)
-	if err := server.Shutdown(ctxt); err != nil {
+	// 先停止接收新请求并排空在途请求，再执行业务清理——
+	// 旧顺序反过来：业务清理期间还在收新请求，且清理耗时吃掉同一份 5s 排空预算
+	drainCtx, cancelDrain := ctx.WithTimeout(ctx.Background(), 5*time.Second)
+	err := server.Shutdown(drainCtx)
+	cancelDrain()
+	cleanCtx, cancelClean := ctx.WithTimeout(ctx.Background(), 5*time.Second)
+	CustomShutdownLogic(cleanCtx)
+	cancelClean()
+	if err != nil {
 		logkit.Error(err.Error())
 		return err
 	}

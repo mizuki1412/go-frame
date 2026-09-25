@@ -55,7 +55,7 @@ main.go                       # cli.RootCMD(...) → user.Init()（注册权限�
 ## Config
 
 - Every key is a `const` in `pkg/cli/configkey/*.go`, bound as cobra flag in `pkg/cli/bind.go`, read via `configkit.GetString/GetInt/GetBool(key, default...)` — never read viper directly.
-- Defaults: `:10000` for REST server; `/v3/api-docs` serves the OpenAPI JSON (no bundled UI).
+- Defaults: `:10000` for REST server; `/v3/api-docs` serves the OpenAPI JSON (no bundled UI). REST 另有 `rest.requestBodySize`（请求体上限 MB，默认 32，0 不限制，经 `middleware.MaxBody` 接线）与 `rest.logRequestBody`（请求参数 info 级日志开关，默认 true，pwd/password/passwd 自动掩码）。
 - Config file: `config.yaml` in working dir, override with `-c/--config`.
 - Env placeholders: after `ReadInConfig`, `loadConfig` expands `${ENV_NAME}` in string config values to `os.Getenv(ENV_NAME)`; unset vars expand to empty string (2026-09-19, VERSION 20260919).
 - Key families (each in its own `configkey/*.go`): rest/db/token/redis/... plus the agent stack:
@@ -126,8 +126,8 @@ token 为**不透明随机串**（crypto/rand 32 字节 hex），不含载荷，
 | `tk:u:<uid>` | SET | 该用户在线的 token 集合 |
 | `tk:online` | ZSET | 全局在线索引，member=token，score=最后活跃时间（毫秒） |
 
-- 两道独立过期闸门：`token.idle` 管「多久没动」（每次鉴权重置，滑动续期），`token.expire` 管「总共能活多久」（以 `LoginTime` 为基准，**续期无法延长**）。`token.multiLogin=false` 时新登录顶掉该用户全部旧会话。
-- 公开 API：`Create/Parse/Refresh/Destroy/DestroyByUser/ListByUser/OnlineCount/ListOnline/ListOnlineOf/LastActive`。
+- 两道独立过期闸门：`token.idle` 管「多久没动」（鉴权滑动续期；会话记录写入按「距上次落库超空闲窗口一半」节流，在线索引 score 每次鉴权都更新），`token.expire` 管「总共能活多久」（以 `LoginTime` 为基准，**续期无法延长**）。`token.multiLogin=false` 时新登录顶掉该用户全部旧会话。
+- 公开 API：`Create/Parse/Refresh/Destroy/DestroyByUser/ListByUser/OnlineCount/ListOnline/ListOnlineOf/LastActive`。`Refresh` 返回 `(*Session, bool)`（鉴权中间件据此免二次解析）；**LastActive 的实时权威在 `tk:online` 的 score**，展示类读取（`LastActive/ListOnline/ListOnlineOf`）一律取 score，会话记录里的字段允许 idle/2 滞后。
 - **用户 id 一律是不透明 `string`**（`Session.UserId` / `Principal.UserId` / `Loader` / `PrincipalOf` / `InvalidatePrincipal` 全部如此）。tokenkit 只把 id 当标识用于建索引与传参，**不做任何数值假设**——自增 bigint 由调用方 `strconv.FormatInt` 成十进制串，UUID/雪花 id 原样传入；业务层的 `int64` ↔ `string` 转换只发生在边界（mod/user 在 `service.uidOf` 与 `cast.ToInt64`）。
 - HTTP 层取身份用 `ctx.GetUidStr() string`（首选）；`ctx.GetUid() int64` 仅供 id 确为数值型的业务层，**非数字 id 会静默返回 0，调用方须自行校验**。
 - `OnlineSession.UserId` 刻意用外层 `int64` 字段遮蔽内层 tokenkit 的 `string` 版，让在线列表的 `userId` 与用户模块其余接口保持数字类型一致。

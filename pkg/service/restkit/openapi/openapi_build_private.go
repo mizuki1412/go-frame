@@ -8,6 +8,7 @@ import (
 	"github.com/example/go-frame/pkg/class/exception"
 	"github.com/example/go-frame/pkg/cli/tag"
 	"github.com/example/go-frame/pkg/library/arraykit"
+	"github.com/example/go-frame/pkg/library/stringkit"
 )
 
 var refPrefix = "#/components/schemas/"
@@ -144,6 +145,10 @@ func buildSchemaByType(t reflect.Type) *ApiDocV3Schema {
 // fieldNameAndSkip 从 struct field 中提取 OpenAPI 字段名。
 // 优先级：json tag（处理 json:"-" 跳过；json:"name,omitempty" 取 name）→ 无 json tag 时用 LowerFirst(field.Name)。
 // 返回 (name, skip)。skip=true 表示该字段不应出现在 schema 中。
+//
+// 命名规则必须与 context.fieldKey 同源（stringkit.LowerFirst）：
+// 原先本包私有一套 lowerFirst（ID→Id）与绑定侧（ID→iD）不一致，
+// 文档展示的参数名会和实际可绑定的参数名对不上。
 func fieldNameAndSkip(field reflect.StructField) (string, bool) {
 	jsonTag := field.Tag.Get("json")
 	if jsonTag != "" {
@@ -158,32 +163,12 @@ func fieldNameAndSkip(field reflect.StructField) (string, bool) {
 		}
 		if name == "" {
 			// json:",omitempty" 无名 → 用字段名 LowerFirst
-			return lowerFirst(field.Name), false
+			return stringkit.LowerFirst(field.Name), false
 		}
 		return name, false
 	}
 	// 无 json tag：用 LowerFirst(field.Name)
-	return lowerFirst(field.Name), false
-}
-
-// lowerFirst 首字母小写（兼容全大写字段名如 ID → Id，而非 iD）
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	// 全大写：ID → Id；URL → Url
-	if len(s) > 1 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
-		// 末尾若为连续大写，仅末位改小写：ID → Id
-		// 找到最后一个连续大写的位置
-		i := 1
-		for i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
-			i++
-		}
-		// i 是第一个非大写的位置；将 s[i-1] 改小写
-		return strings.ToLower(s[:1]) + s[1:i-1] + strings.ToLower(string(s[i-1])) + s[i:]
-	}
-	// 普通首字母大写：Name → name
-	return strings.ToLower(s[:1]) + s[1:]
+	return stringkit.LowerFirst(field.Name), false
 }
 
 // buildFieldSchemas 统一封装对象的成员变量为 schema，并回调处理。
@@ -303,14 +288,16 @@ func buildObjectSchema(rt reflect.Type) *ApiDocV3Schema {
 
 // buildComponentSchema 将对象写入 components/schemas 并返回 $ref。
 // 处理循环引用：先注册空 schema 占位，再立即构建并覆盖。
+// key 用包限定名（rt.String()，如 "mod.user.ResLogin"）：裸类型名在跨包同名 struct
+// 时会静默互相覆盖，文档只剩最后一个。
 func buildComponentSchema(rt reflect.Type) string {
 	for rt.Kind() == reflect.Pointer {
 		rt = rt.Elem()
 	}
-	name := rt.Name()
-	if name == "" {
+	if rt.Name() == "" {
 		panic(exception.New("openapi components schema name is nil"))
 	}
+	name := rt.String()
 	// 已注册：直接返回 ref（含已注册但 todo 未处理的占位）
 	if _, ok := Doc.Components.Schemas[name]; ok {
 		return refPrefix + name

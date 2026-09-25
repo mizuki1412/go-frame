@@ -12,6 +12,7 @@ import (
 	"github.com/example/go-frame/pkg/library/jsonkit"
 	"github.com/example/go-frame/pkg/library/stringkit"
 	"github.com/example/go-frame/pkg/service/configkit"
+	"github.com/example/go-frame/pkg/service/logkit"
 	"github.com/example/go-frame/pkg/service/restkit/context"
 )
 
@@ -56,25 +57,27 @@ type BuildOpt func(*Builder)
 //   - gin catch-all `*action` → `{action}`（OpenAPI 不区分单段/多段，统一为 {name}）
 //   - 已是 `{name}` 形式的保持不变
 //
-// 修复前 `*action` 在 path 中原样保留，生成不合规的 OpenAPI path。
+// 替换按路径段逐段进行：原实现用 strings.ReplaceAll(path, ":id", "{id}")，
+// 参数名互为前缀时（/:id 与 /:id2）会把 ":id2" 污染成 "{id}2"，生成非法 path。
 func GenOperationId(path, method string) (string, string) {
 	res := strings.ToLower(method)
-	arr := strings.Split(path, "/")
-	for _, e := range arr {
+	segs := strings.Split(path, "/")
+	for i, e := range segs {
 		if e == "" {
 			continue
 		}
 		// gin 路径参数 :id → {id}；catch-all *action → {action}
-		if len(e) >= 1 && (e[0] == ':' || e[0] == '*') {
-			path = strings.ReplaceAll(path, e, "{"+e[1:]+"}")
+		if e[0] == ':' || e[0] == '*' {
+			segs[i] = "{" + e[1:] + "}"
+			continue
 		}
 		// 跳过路径参数段（已转为 {name} 或原本就是 {name}），不参与 operationId 拼接
-		if len(e) >= 1 && (e[0] == ':' || e[0] == '*' || e[0] == '{') {
+		if e[0] == '{' {
 			continue
 		}
 		res += stringkit.UpperFirst(e)
 	}
-	return res, path
+	return res, strings.Join(segs, "/")
 }
 
 // NewBuilder 构建单条路径的 operation。
@@ -86,6 +89,10 @@ func NewBuilder(path string, method string) *Builder {
 	op.OperationId, path = GenOperationId(path, method)
 	if _, ok := Doc.Paths[path]; !ok {
 		Doc.Paths[path] = map[string]*ApiDocV3PathOperation{}
+	}
+	// gin 对重复路由会 panic，正常到不了这里；但文档侧静默覆盖会掩盖问题，显式告警
+	if _, exists := Doc.Paths[path][method]; exists {
+		logkit.Info("openapi 路径重复注册，后者覆盖前者", "path", path, "method", method)
 	}
 	Doc.Paths[path][method] = op
 	return &Builder{Path: op}

@@ -36,22 +36,32 @@ func paint(color, s string) string {
 	return color + s + colorReset
 }
 
+// Log 访问日志中间件：每请求一行，console 与 file 各自同源输出一次。
+// 原实现每请求最多四条输出（request/response 各打一次 + 彩色行绕过 logkit 直写 stderr），
+// 且 log.console=false 时彩色行仍然打印；现收敛为：
+//   - 文件通道：logkit.InfoFile 结构化一行（未配置文件日志时为空操作）
+//   - 控制台通道：彩色单行，仅 log.console=true 时输出
+//
+// 不打印 uid：取 uid 需解析会话，公开接口会被白打一次存储。
 func Log() router.Handler {
 	return func(ctx *context.Context) {
 		t := time.Now()
-		logkit.Info("request", "url", ctx.Request.URL.String())
-
 		ctx.Proxy.Next()
-
 		latency := float64(time.Since(t).Microseconds()) / 1000
 		status := ctx.Proxy.Writer.Status()
-		logkit.InfoFile("response", "url", ctx.Request.URL.String(), "latency", latency, "status", status)
-		msg := fmt.Sprintf("msg=response %s %s url=%s",
-			paint(statusColor(status), strconv.Itoa(status)),
-			paint(latencyColor(latency), fmtLatency(latency)),
-			ctx.Request.URL.String())
-		fmt.Fprintf(os.Stderr, "time=%s level=INFO %s\n",
-			t.Format("2006/01/02-15:04:05"), msg)
+		url := ctx.Request.URL.String()
+		ip := ctx.ClientIp()
+		logkit.InfoFile("access", "method", ctx.Request.Method, "url", url,
+			"status", status, "latency", latency, "ip", ip)
+		if logkit.ConsoleEnabled() {
+			msg := fmt.Sprintf("msg=access %s %s %s url=%s ip=%s",
+				ctx.Request.Method,
+				paint(statusColor(status), strconv.Itoa(status)),
+				paint(latencyColor(latency), fmtLatency(latency)),
+				url, ip)
+			fmt.Fprintf(os.Stderr, "time=%s level=INFO %s\n",
+				t.Format("2006/01/02-15:04:05"), msg)
+		}
 	}
 }
 
