@@ -181,7 +181,7 @@ func (dao Dao[T]) buildUpsert(dest *T, conflictCols ...string) InsertDao[T] {
 			setPairs[i] = e.Key + "=excluded." + e.Key
 		}
 		quoted := dao.modelMeta.escapeNames(dao.dataSource, conflictCols)
-		builder = builder.Suffix("on conflict ("+strings.Join(quoted, ", ")+") do update set "+strings.Join(setPairs, ", "))
+		builder = builder.Suffix("on conflict (" + strings.Join(quoted, ", ") + ") do update set " + strings.Join(setPairs, ", "))
 	case dao.dataSource.Driver == sqlconst.Mysql:
 		setPairs := make([]string, len(upKeys))
 		for i, e := range upKeys {

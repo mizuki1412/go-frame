@@ -172,6 +172,12 @@ func bindDefaultFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Int(configkey.RagflowKnnTopK, 1024, "参与向量相似度计算的候选 chunk 数量")
 	cmd.PersistentFlags().Bool(configkey.RagflowKeyword, false, "是否启用关键词匹配")
 	cmd.PersistentFlags().Int(configkey.RagflowTimeoutSeconds, 30, "检索请求超时秒数")
+
+	// mineru 文档解析服务（V1 API，业务实现在主项目 mod/）
+	cmd.PersistentFlags().String(configkey.MineruBaseUrl, "", "MinerU 服务地址，如 http://127.0.0.1:8000")
+	cmd.PersistentFlags().String(configkey.MineruApiKey, "", "MinerU API Key（Bearer 认证），本地匿名部署留空")
+	cmd.PersistentFlags().String(configkey.MineruTier, "basic", "解析档位：flash/basic/standard/advanced")
+	cmd.PersistentFlags().Int(configkey.MineruPollTimeoutSeconds, 1800, "单文件解析轮询预算秒数，0 不限制")
 }
 
 func bind(cmd *cobra.Command) {

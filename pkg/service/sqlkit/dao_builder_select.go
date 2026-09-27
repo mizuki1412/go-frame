@@ -111,6 +111,7 @@ func (dao SelectDao[T]) FromAs(alias string) SelectDao[T] {
 	dao.fromAs = alias
 	return dao
 }
+
 // FromSubQuery 以子查询为 FROM 表。子查询先 applyFrom 保证自带 FROM 子句
 // （此前直接嵌入 builder，生成的子查询没有 FROM，SQL 非法）。
 func (dao SelectDao[T]) FromSubQuery(sub SelectDao[T], alias string) SelectDao[T] {
