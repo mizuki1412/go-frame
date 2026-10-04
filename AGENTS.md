@@ -106,7 +106,6 @@ Batch strategy with `WithCascadeBatchLinks` to avoid N+1. No byte enums.
 - `WhereJsonbPathText/Eq` 的 key 与值均已参数化，key 可直接接用户输入（此前 key 被包成标识符，PG 上报 column not exist）；`SelectEx/SelectPrefix` 的排除参数传未转义字段名。
 - 昂贵 debug 日志参数（如 args 的 JSON 序列化）用 `logkit.DebugEnabled()` 先判级再拼装，勿在调用点无条件求值。
 - `WithSchema` 的拷贝持有创建那一刻的 TX 快照：在父 ds `BeginTX` 之前创建则其读写不进父事务，需要事务时先 BeginTX 再 WithSchema。
-- `QueryTables()` / `QueryPrimaryKeys(table)`：schema 级元数据查询（基础表枚举、按序主键列，无主键返回空）。mysql 系（含 doris）走 information_schema，DM/Oracle 走 ALL_TABLES/ALL_CONSTRAINTS，pg 系走 information_schema；schema 取 `ds.Schema`，与 `QueryColumnDef` 同一限制（PG/Kingbase 默认 public）。
 
 ### Routing + OpenAPI
 
