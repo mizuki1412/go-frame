@@ -178,6 +178,9 @@ func bindDefaultFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().String(configkey.MineruApiKey, "", "MinerU API Key（Bearer 认证），本地匿名部署留空")
 	cmd.PersistentFlags().String(configkey.MineruTier, "basic", "解析档位：flash/basic/standard/advanced")
 	cmd.PersistentFlags().Int(configkey.MineruPollTimeoutSeconds, 1800, "单文件解析轮询预算秒数，0 不限制")
+	cmd.PersistentFlags().Bool(configkey.MineruRepair, true, "解析后用 PDF 文本层交叉修复参数表 OCR 串扰（仅 PDF 源）")
+	cmd.PersistentFlags().Bool(configkey.MineruRepairLLM, true, "纠偏残留的 LLM 仲裁（复用 llm.* 配置，输出经 PDF 文本层逐字验证）")
+	cmd.PersistentFlags().Bool(configkey.MineruImageParse, true, "Office 产物图片二次解析并合并回 markdown（仅 Office 源）")
 }
 
 func bind(cmd *cobra.Command) {

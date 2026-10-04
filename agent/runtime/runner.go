@@ -53,14 +53,28 @@ drive roots). You may call ls with no path to list the workspace first.
 Tools whose names are prefixed with "<server>__" come from configured MCP servers;
 use them when their descriptions match the task.`
 
-// NewRunner 创建带 skill + filesystem 中间件的 Agent Runner
+// RunnerOptions NewRunner 的附加选项：零值字段沿用默认行为
+type RunnerOptions struct {
+	// Instruction 覆盖默认系统指令（agentInstruction）；为空用默认
+	Instruction string
+	// ExtraTools 追加注册的业务侧工具（如 desk-auto 的桌面操作工具集）
+	ExtraTools []tool.BaseTool
+}
+
+// NewRunner 创建带 skill + filesystem 中间件的 Agent Runner（默认选项）
+func NewRunner(cm model.ToolCallingChatModel, store adk.CheckPointStore) (*adk.Runner, error) {
+	return NewRunnerWithOptions(cm, store, nil)
+}
+
+// NewRunnerWithOptions 创建带 skill + filesystem 中间件的 Agent Runner，
+// opts 非 nil 时应用附加选项（覆盖指令、追加工具）。
 //
 // ChatModelAgent 内置 ReAct 循环（model → tool call → model，最多 MaxIterations 轮），
 // 循环能否自转取决于模型是否发起工具调用 —— 由 instruction 与中间件注入的工具共同驱动。
 //
 // store 非 nil 时作为 RunnerConfig.CheckPointStore 接入：运行被中断（cancel/interrupt）
 // 时执行状态落盘，可用 Runner.Resume 恢复；store 为 nil 则不启用 checkpoint。
-func NewRunner(cm model.ToolCallingChatModel, store adk.CheckPointStore) (*adk.Runner, error) {
+func NewRunnerWithOptions(cm model.ToolCallingChatModel, store adk.CheckPointStore, opts *RunnerOptions) (*adk.Runner, error) {
 	ctx := context.Background()
 	skillsDir, _ := filepath.Abs(configkit.GetString(configkey.AgentSkillsDir))
 	stream := configkit.GetBool(configkey.AgentStream, true)
@@ -149,10 +163,21 @@ func NewRunner(cm model.ToolCallingChatModel, store adk.CheckPointStore) (*adk.R
 	}
 	toolList = append(toolList, mcpTools...)
 
+	// 业务侧追加工具（如 desk-auto 的桌面操作工具集）
+	if opts != nil && len(opts.ExtraTools) > 0 {
+		toolList = append(toolList, opts.ExtraTools...)
+	}
+
+	// 指令覆盖：业务侧（如 desk-auto）可替换默认系统指令
+	instruction := agentInstruction
+	if opts != nil && opts.Instruction != "" {
+		instruction = opts.Instruction
+	}
+
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "demo_agent",
 		Description: "A demo agent that can load skills",
-		Instruction: agentInstruction,
+		Instruction: instruction,
 		Model:       cm,
 		Handlers:    handlers,
 		ToolsConfig: adk.ToolsConfig{

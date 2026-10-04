@@ -48,13 +48,21 @@ func run() error {
 	// MCP 连接（含 stdio 子进程）随会话结束统一清理
 	defer runtime.CloseMCPClients()
 
+	return AgentLoop(runner, store)
+}
+
+// AgentLoop 交互式多轮会话循环：输入命令处理（session <id> 恢复历史会话、
+// exit/quit 退出、clear 重置、resume 断点续跑），其余输入作为一轮任务交给 runner。
+// agent 与 desk-auto（主项目 deskauto 包）共用
+func AgentLoop(runner *adk.Runner, store adk.CheckPointStore) error {
 	// 按 agent.sessionDir 配置创建会话历史存储（为空则不持久化）
 	var sessStore *sessionstore.SessionStore
 	if dir := configkit.GetString(configkey.AgentSessionDir); dir != "" {
-		sessStore, err = sessionstore.NewSessionStore(dir)
+		s, err := sessionstore.NewSessionStore(dir)
 		if err != nil {
 			return err
 		}
+		sessStore = s
 	}
 
 	// 每次启动生成新的唯一 session ID
