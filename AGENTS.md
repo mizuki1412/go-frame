@@ -56,7 +56,7 @@ main.go                       # cli.RootCMD(...) → user.Init()（注册权限�
 
 - Every key is a `const` in `pkg/cli/configkey/*.go`, bound as cobra flag in `pkg/cli/bind.go`, read via `configkit.GetString/GetInt/GetBool(key, default...)` — never read viper directly.
 - Defaults: `:10000` for REST server; `/v3/api-docs` serves the OpenAPI JSON (no bundled UI). REST 另有 `rest.requestBodySize`（请求体上限 MB，默认 32，0 不限制，经 `middleware.MaxBody` 接线）与 `rest.logRequestBody`（请求参数 info 级日志开关，默认 true，pwd/password/passwd 自动掩码）。
-- DB 另有 `db.sslMode`（PG/Kingbase sslmode：disable/require/verify-ca/verify-full，默认 disable；MySQL DSN 固定 utf8mb4，loc 取 timekit 时区）。
+- DB 另有 `db.sslMode`（PG/Kingbase sslmode：disable/require/verify-ca/verify-full，默认 disable；MySQL DSN 固定 utf8mb4，loc 取 timekit 时区）。`DataSourceParam.Params`（json `params`）为 mysql 系统变量参数，追加到 DSN、go-sql-driver 在每个新连接上 SET 生效（如 `sql_mode` 放宽零日期写入，2026-10-16 datax 5.7→8.0 迁移引入）。值按 SQL 值语义传入，由 `quoteParamSQLValue` 归一：字符串型自动补单引号（驱动把参数原样拼成 `SET <key> = <value>`，漏引号时含逗号的值会 1064、建连即 panic），数字与 true/false/on/off/default/null 原样保留，已带单引号的值不再处理。
 - Config file: `config.yaml` in working dir, override with `-c/--config`.
 - Env placeholders: after `ReadInConfig`, `loadConfig` expands `${ENV_NAME}` in string config values to `os.Getenv(ENV_NAME)`; unset vars expand to empty string (2026-09-19, VERSION 20260919).
 - Key families (each in its own `configkey/*.go`): rest/db/token/redis/... plus the agent stack:
@@ -106,6 +106,8 @@ Batch strategy with `WithCascadeBatchLinks` to avoid N+1. No byte enums.
 - `WhereJsonbPathText/Eq` 的 key 与值均已参数化，key 可直接接用户输入（此前 key 被包成标识符，PG 上报 column not exist）；`SelectEx/SelectPrefix` 的排除参数传未转义字段名。
 - 昂贵 debug 日志参数（如 args 的 JSON 序列化）用 `logkit.DebugEnabled()` 先判级再拼装，勿在调用点无条件求值。
 - `WithSchema` 的拷贝持有创建那一刻的 TX 快照：在父 ds `BeginTX` 之前创建则其读写不进父事务，需要事务时先 BeginTX 再 WithSchema。
+- `EscapeName` 对标识符内部定界符翻倍（mysql/taos 的 ` → ``，PG/Oracle/DM 的 " → ""），不经它手工拼转义符是唯一合法路径；只包外层会把含反引号的列名（现实中存在，如 `` concat(scjj.`统一社会信用代码`, ...) ``）提前闭合成 1064。
+- `QueryStreamMap(sql, fn(row) error, args...)` 流式读取：逐行回调、不整页积攒（mysql 驱动 Next 本就是逐行惰性读网络包），大表/宽行/大字段场景内存 O(1)。fn 返回 error 立即终止并原样上抛；scan/迭代错误同样返回 error（不像 QueryListMap 走 panic）；查询建立失败仍 panic 可被 RecoverFuncWrapper 捕获。fn 的 map 仅当轮回调有效；流式占用一个连接直到迭代结束，需并发写入时连接池 maxOpen ≥ 2。免 DB 单测见 datasource_stream_test.go 的内存 fake driver。
 
 ### Routing + OpenAPI
 

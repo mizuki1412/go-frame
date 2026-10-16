@@ -185,3 +185,72 @@ func TestInsertBatchChunkSize(t *testing.T) {
 		t.Fatalf("chunk size 下限错误: %d", got)
 	}
 }
+
+// mysql 系统变量参数值的引号归一：go-sql-driver 把 DSN 参数原样拼成 SET <key> = <value>，
+// 字符串型变量若不自带单引号，值里的逗号会被当成下一个变量的起始
+// （sql_mode=ONLY_FULL_GROUP_BY,NO_ENGINE_SUBSTITUTION → Error 1064 near ”，建连即 panic）。
+func TestQuoteParamSQLValue(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"ONLY_FULL_GROUP_BY,NO_ENGINE_SUBSTITUTION", "'ONLY_FULL_GROUP_BY,NO_ENGINE_SUBSTITUTION'"},
+		{"+08:00", "'+08:00'"},
+		{"'ANSI'", "'ANSI'"},
+		{"1", "1"},
+		{"0.5", "0.5"},
+		{"-1", "-1"},
+		{"1e5", "1e5"},
+		{"true", "true"},
+		{"OFF", "OFF"},
+		{"", ""},
+		{`O'Brien\path`, `'O''Brien\\path'`},
+		{"NaN", "'NaN'"},
+	}
+	for _, c := range cases {
+		if got := quoteParamSQLValue(c.in); got != c.want {
+			t.Fatalf("quoteParamSQLValue(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// DSN 端到端：sql_mode 的值以 %27 包裹（驱动 QueryUnescape 后即带单引号的字符串字面量），
+// 数字型参数不被误加引号。
+func TestMysqlDSNQuotesParamValue(t *testing.T) {
+	_, dsn := getDataSourceName(DataSourceParam{
+		Driver: sqlconst.Mysql, Host: "127.0.0.1", Port: "3306", User: "u", Pwd: "p", Name: "db",
+		Params: map[string]string{
+			"sql_mode":   "ONLY_FULL_GROUP_BY,NO_ENGINE_SUBSTITUTION",
+			"autocommit": "1",
+		},
+	})
+	if !strings.Contains(dsn, "sql_mode=%27ONLY_FULL_GROUP_BY%2CNO_ENGINE_SUBSTITUTION%27") {
+		t.Fatalf("sql_mode 未按字符串变量加引号: %s", dsn)
+	}
+	if !strings.Contains(dsn, "autocommit=1") {
+		t.Fatalf("数字型参数被误加引号: %s", dsn)
+	}
+}
+
+// EscapeName 的标识符内部定界符必须翻倍：datax 迁移时源表列名本身含反引号
+// （如 `concat(scjj.`统一社会信用代码`, now(), '330903')`），只包外层会被提前闭合，
+// 整条 SQL 报 1064 near '`'。
+func TestEscapeNameEscapesDelimiter(t *testing.T) {
+	cases := []struct{ driver, name, want string }{
+		{sqlconst.Mysql, "id", "`id`"},
+		{sqlconst.Mysql, "统一社会信用代码", "`统一社会信用代码`"},
+		{sqlconst.Mysql, "co`l", "`co``l`"},
+		{sqlconst.Mysql, "concat(scjj.`统一社会信用代码`, now(), '330903')",
+			"`concat(scjj.``统一社会信用代码``, now(), '330903')`"},
+		{sqlconst.Postgres, "co\"l", `"co""l"`},
+		{sqlconst.Kingbase, "a\"b", `"a""b"`},
+		{sqlconst.Oracle, "co\"l", `"CO""L"`},
+		{sqlconst.DM, `x"y`, `"X""Y"`},
+		{sqlconst.SqlServer, "co\"l", `"co""l"`},
+		// sqlite3 走 default 分支，定界符是双引号：名字里的反引号不是定界符，无需处理
+		{sqlconst.Sqlite3, "a`b\"c", "\"a`b\"\"c\""},
+	}
+	for _, c := range cases {
+		ds := &DataSource{Driver: c.driver}
+		if got := ds.EscapeName(c.name); got != c.want {
+			t.Fatalf("%s EscapeName(%q) = %q, want %q", c.driver, c.name, got, c.want)
+		}
+	}
+}

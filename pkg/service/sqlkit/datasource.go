@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,11 @@ type DataSourceParam struct {
 	MaxLife int    `json:"maxLife"`
 	// SSLMode PG/Kingbase 的 sslmode（disable/require/verify-ca/verify-full），空 = disable
 	SSLMode string `json:"sslMode"`
+	// Params mysql 驱动的系统变量参数（如 sql_mode），追加到 DSN，go-sql-driver 会在每个
+	// 新连接上执行 SET 生效（连接池内连接均适用）；key/value 做 URL 转义。
+	// 值为 SQL 值语义：字符串型自动补单引号（sql_mode 这类值务必不用自己加引号），
+	// 数字与布尔关键字（true/false/on/off/default/null）原样保留，已带单引号的值不再处理
+	Params map[string]string `json:"params"`
 }
 
 func getDataSourceName(p DataSourceParam) (string, string) {
@@ -71,6 +77,9 @@ func getDataSourceName(p DataSourceParam) (string, string) {
 	case sqlconst.Mysql:
 		// charset 用 utf8mb4；loc 取 timekit 的时区配置，避免硬编码
 		param = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s", p.User, p.Pwd, p.Host, p.Port, p.Name, url.QueryEscape(timekit.GetLocation().String()))
+		for k, v := range p.Params {
+			param += "&" + url.QueryEscape(k) + "=" + url.QueryEscape(quoteParamSQLValue(v))
+		}
 		if p.Host == "" || p.Port == "" {
 			panic(exception.New("sqlkit: database config error"))
 		}
@@ -118,6 +127,40 @@ func quotePGDSN(v string) string {
 		return "'" + v + "'"
 	}
 	return v
+}
+
+// quoteParamSQLValue 归一 mysql 系统变量参数值：go-sql-driver 把 DSN 参数原样拼成
+// `SET <key> = <value>`，字符串型变量必须自带单引号——否则值里的逗号会被当成下一个变量的
+// 起始（sql_mode=ONLY_FULL_GROUP_BY,NO_ENGINE_SUBSTITUTION → Error 1064 near ”，且发生在
+// 建连阶段直接 panic）。已用单引号包裹的值、数字与布尔关键字保持原样，其余包单引号并转义内部
+// 反斜杠与单引号。
+func quoteParamSQLValue(v string) string {
+	if v == "" {
+		return v
+	}
+	if len(v) >= 2 && strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'") {
+		return v
+	}
+	if isBareSQLValue(v) {
+		return v
+	}
+	v = strings.ReplaceAll(v, `\`, `\\`)
+	v = strings.ReplaceAll(v, "'", "''")
+	return "'" + v + "'"
+}
+
+// isBareSQLValue 判断参数值能否不加引号直接出现在 SET 右侧：数字（$ 前后缀、Inf、NaN 等
+// ParseFloat 能吞下的非数字写法先按首字符挡掉）或布尔/状态关键字。
+func isBareSQLValue(v string) bool {
+	switch strings.ToLower(v) {
+	case "true", "false", "on", "off", "default", "null":
+		return true
+	}
+	if c := v[0]; (c < '0' || c > '9') && c != '+' && c != '-' && c != '.' {
+		return false
+	}
+	_, err := strconv.ParseFloat(v, 64)
+	return err == nil
 }
 
 // NewDataSource 创建一个数据源
@@ -211,22 +254,24 @@ func (ds *DataSource) DecoTableName(tableName string) string {
 	return s + ds.EscapeName(tableName)
 }
 
-// EscapeName 表名列名的转义符添加
+// EscapeName 表名列名的转义符添加。标识符内部的定界符按 SQL 规则翻倍：
+// mysql/taos 的 ` 与 PG/Oracle/DM 的 " 成对出现，内部字面量必须写两遍
+// （列名本身含反引号时不转义会被提前闭合，报 1064 near '`'）。
 func (ds *DataSource) EscapeName(name string) string {
 	switch ds.Driver {
 	case sqlconst.Mysql:
-		return "`" + name + "`"
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	case sqlconst.TaosWS, sqlconst.TaosSql:
 		// key=tabname时，特殊处理，不加``，如果加了就代表是自定义表字段
 		if name == "tbname" {
 			return name
 		}
-		return "`" + name + "`"
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	case sqlconst.DM, sqlconst.Oracle:
 		// 注意大写了
-		return "\"" + strings.ToUpper(name) + "\""
+		return `"` + strings.ReplaceAll(strings.ToUpper(name), `"`, `""`) + `"`
 	default:
-		return "\"" + name + "\""
+		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 	}
 }
 

@@ -141,6 +141,30 @@ func (ds *DataSource) QueryListStringCtx(ctx context.Context, sql string, args .
 	return list
 }
 
+// QueryStreamMap 流式读取：逐行回调 fn，不在内存中积攒整页结果，适合大表/宽行/大字段场景。
+// fn 返回 error 时立即终止迭代并原样返回该错误（语义由调用方决定）；查询建立失败仍 panic
+// （与 QueryListMap 一致，可被 RecoverFuncWrapper 捕获重试）。fn 收到的 map 仅本轮回调有效，
+// 需留存须自行拷贝。注意：流式读取会占用一个连接直到迭代结束，并发写入需连接池 maxOpen ≥ 2
+func (ds *DataSource) QueryStreamMap(sql string, fn func(row map[string]any) error, args ...any) error {
+	return ds.QueryStreamMapCtx(context.Background(), sql, fn, args...)
+}
+
+func (ds *DataSource) QueryStreamMapCtx(ctx context.Context, sql string, fn func(row map[string]any) error, args ...any) error {
+	rows := ds.QueryCtx(ctx, sql, args)
+	defer rows.Close()
+	for rows.Next() {
+		m := map[string]any{}
+		if err := rows.MapScan(m); err != nil {
+			return err
+		}
+		if err := fn(m); err != nil {
+			return err
+		}
+	}
+	// 迭代错误检查：否则中途出错会静默当作正常结束
+	return rows.Err()
+}
+
 // FormatRawMap 原始查出的map[string]any 转为 map[string]string 用于sql语句中
 // 注意防注入
 func (ds *DataSource) FormatRawMap(rows map[string]any) map[string]string {
