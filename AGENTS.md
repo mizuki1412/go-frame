@@ -108,6 +108,7 @@ Batch strategy with `WithCascadeBatchLinks` to avoid N+1. No byte enums.
 - `WithSchema` 的拷贝持有创建那一刻的 TX 快照：在父 ds `BeginTX` 之前创建则其读写不进父事务，需要事务时先 BeginTX 再 WithSchema。
 - `EscapeName` 对标识符内部定界符翻倍（mysql/taos 的 ` → ``，PG/Oracle/DM 的 " → ""），不经它手工拼转义符是唯一合法路径；只包外层会把含反引号的列名（现实中存在，如 `` concat(scjj.`统一社会信用代码`, ...) ``）提前闭合成 1064。
 - `QueryStreamMap(sql, fn(row) error, args...)` 流式读取：逐行回调、不整页积攒（mysql 驱动 Next 本就是逐行惰性读网络包），大表/宽行/大字段场景内存 O(1)。fn 返回 error 立即终止并原样上抛；scan/迭代错误同样返回 error（不像 QueryListMap 走 panic）；查询建立失败仍 panic 可被 RecoverFuncWrapper 捕获。fn 的 map 仅当轮回调有效；流式占用一个连接直到迭代结束，需并发写入时连接池 maxOpen ≥ 2。免 DB 单测见 datasource_stream_test.go 的内存 fake driver。
+- 不走 squirrel 的原生 SQL 拼接（如业务侧批量 INSERT 参数化）用导出的 `sqlkit.RawPlaceholder(driver, index)` 按驱动生成占位符（pg/kingbase `$n`、dm/oracle `:n`、其余 `?`），配合 `Exec(sql, args)` 参数化执行；不要手工拼值进 SQL 文本——值含引号/反斜杠时只有驱动转义是安全的（`FormatRawValue` 只转义 `'` 不转义 `\`，仅适用于拼 where 条件等键值可控场景）。
 
 ### Routing + OpenAPI
 

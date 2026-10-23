@@ -70,15 +70,26 @@ func getDataSourceName(p DataSourceParam) (string, string) {
 			ssl = "disable"
 		}
 		// user/password 按 libpq 规则转义，含空格等特殊字符时不致破坏 DSN
-		param = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", p.Host, p.Port, quotePGDSN(p.User), quotePGDSN(p.Pwd), p.Name, ssl)
+		// connect_timeout：建连阶段超时，避免主机不可达/半开链路时无限阻塞在拨号上
+		param = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=10", p.Host, p.Port, quotePGDSN(p.User), quotePGDSN(p.Pwd), p.Name, ssl)
 		if p.Host == "" || p.Port == "" {
 			panic(exception.New("sqlkit: database config error"))
 		}
 	case sqlconst.Mysql:
 		// charset 用 utf8mb4；loc 取 timekit 的时区配置，避免硬编码
+		// timeout：建连阶段超时（拨号挂起保护）；params 显式配了同名键则不追加默认值
 		param = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s", p.User, p.Pwd, p.Host, p.Port, p.Name, url.QueryEscape(timekit.GetLocation().String()))
+		if _, ok := p.Params["timeout"]; !ok {
+			param += "&timeout=10s"
+		}
 		for k, v := range p.Params {
-			param += "&" + url.QueryEscape(k) + "=" + url.QueryEscape(quoteParamSQLValue(v))
+			// 驱动级参数（timeout/readTimeout/writeTimeout/interpolateParams 等）由
+			// go-sql-driver 自己解析，值是 Go 形态（如 5m、true），不能按 SQL 字面量包单引号
+			if driverLevelMysqlParam[k] {
+				param += "&" + url.QueryEscape(k) + "=" + url.QueryEscape(v)
+			} else {
+				param += "&" + url.QueryEscape(k) + "=" + url.QueryEscape(quoteParamSQLValue(v))
+			}
 		}
 		if p.Host == "" || p.Port == "" {
 			panic(exception.New("sqlkit: database config error"))
@@ -127,6 +138,17 @@ func quotePGDSN(v string) string {
 		return "'" + v + "'"
 	}
 	return v
+}
+
+// driverLevelMysqlParam go-sql-driver 自身的 DSN 参数（非 SET 系统变量）：值由驱动解析，
+// 保持 Go 形态（duration/bool），不经过 quoteParamSQLValue 的 SQL 字面量引号包裹
+var driverLevelMysqlParam = map[string]bool{
+	"timeout": true, "readTimeout": true, "writeTimeout": true,
+	"allowNativePasswords": true, "allowAllFiles": true, "checkConnLiveness": true,
+	"clientFoundRows": true, "columnsNumberAlias": true, "interpolateParams": true,
+	"maxAllowedPacket": true, "multiStatements": true, "parseTime": true,
+	"rejectReadOnly": true, "serverRSAPublicKeyFile": true, "strict": true,
+	"tls": true, "charset": true, "collation": true, "lru_cache_size": true,
 }
 
 // quoteParamSQLValue 归一 mysql 系统变量参数值：go-sql-driver 把 DSN 参数原样拼成

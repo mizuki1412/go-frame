@@ -181,6 +181,13 @@ func placeholder(driver string) squirrel.PlaceholderFormat {
 	}
 }
 
+// RawPlaceholder 返回原生 SQL 的占位符（rawPlaceholder 的导出包装）：
+// 业务层不走 squirrel 的原生 SQL 拼接（如批量 INSERT 参数化）需按驱动生成占位符。
+// index 从 1 开始；对不区分位置的占位符（?）忽略 index。
+func RawPlaceholder(driver string, index int) string {
+	return rawPlaceholder(driver, index)
+}
+
 // rawPlaceholder 返回原生 SQL（不经过 squirrel）的占位符，避免字符串拼接引发的 SQL 注入。
 // index 从 1 开始；对不区分位置的占位符（?）忽略 index。
 func rawPlaceholder(driver string, index int) string {
