@@ -5,6 +5,7 @@ package robot
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/example/go-frame/pkg/class/exception"
 	"github.com/example/go-frame/pkg/service/logkit"
@@ -93,6 +94,54 @@ func mouseScroll(ctx context.Context, in mouseScrollInput) (mouseScrollOutput, e
 	}
 	robotwin.Scroll(in.DX, in.DY)
 	return mouseScrollOutput{Result: fmt.Sprintf("已滚动 dx=%d dy=%d。", in.DX, in.DY)}, nil
+}
+
+// mouseDragInput desk_mouse_drag 工具入参
+type mouseDragInput struct {
+	// FromX 起点横坐标（屏幕像素，拖动起始位置）
+	FromX int `json:"fromX" jsonschema:"description=Start X in screen pixels (drag source)."`
+	// FromY 起点纵坐标
+	FromY int `json:"fromY" jsonschema:"description=Start Y in screen pixels (drag source)."`
+	// ToX 终点横坐标（拖动释放位置）
+	ToX int `json:"toX" jsonschema:"description=End X in screen pixels (drop target)."`
+	// ToY 终点纵坐标
+	ToY int `json:"toY" jsonschema:"description=End Y in screen pixels (drop target)."`
+	// Button 拖动期间按住的鼠标按键：left（默认）/ right / middle
+	Button string `json:"button,omitempty" jsonschema:"description=Mouse button held during the drag: left (default), right or middle."`
+}
+
+// mouseDragOutput desk_mouse_drag 工具出参
+type mouseDragOutput struct {
+	Result string `json:"result"`
+}
+
+// desk_mouse_drag 按住鼠标按键从起点平滑拖动到终点后松开（移动文件/框选/滑块等）
+func mouseDrag(ctx context.Context, in mouseDragInput) (mouseDragOutput, error) {
+	ensureDPIAware()
+	button := in.Button
+	if button == "" {
+		button = "left"
+	}
+	switch button {
+	case "left", "right", "middle":
+	default:
+		return mouseDragOutput{}, exception.New(fmt.Sprintf("不支持的按键 %q（left/right/middle）", button))
+	}
+	robotwin.Move(in.FromX, in.FromY)
+	if err := robotwin.MouseDown(button); err != nil {
+		return mouseDragOutput{}, exception.New("按下鼠标失败: " + err.Error())
+	}
+	time.Sleep(100 * time.Millisecond) // 让应用识别到按下状态再开始移动
+	if !robotwin.MoveSmooth(in.ToX, in.ToY) {
+		_ = robotwin.MouseUp(button) // 移动失败也要松开，避免按键卡住
+		return mouseDragOutput{}, exception.New(fmt.Sprintf("移动到 (%d, %d) 失败", in.ToX, in.ToY))
+	}
+	time.Sleep(100 * time.Millisecond) // 终点停顿，让落点识别到悬停位置
+	if err := robotwin.MouseUp(button); err != nil {
+		return mouseDragOutput{}, exception.New("松开鼠标失败: " + err.Error())
+	}
+	logkit.Info("[desk_mouse_drag]", "fromX", in.FromX, "fromY", in.FromY, "toX", in.ToX, "toY", in.ToY, "button", button)
+	return mouseDragOutput{Result: fmt.Sprintf("已从 (%d, %d) 拖动到 (%d, %d)（%s键按住）。", in.FromX, in.FromY, in.ToX, in.ToY, button)}, nil
 }
 
 // keyTapInput desk_key_tap 工具入参

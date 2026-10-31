@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
-	robotwin "github.com/go-vgo/robotgo/win"
 	"github.com/tailscale/win"
 )
 
@@ -76,7 +76,7 @@ func windowActivate(ctx context.Context, in windowActivateInput) (windowActivate
 		win.ShowWindow(hwnd, win.SW_RESTORE)
 	}
 	win.SetForegroundWindow(hwnd)
-	robotwin.MilliSleep(200)
+	time.Sleep(200 * time.Millisecond) // 等待窗口切换生效（原 robotwin.MilliSleep，v1.3.5 win 子包已移除）
 
 	info := windowSnapshot(hwnd)
 	if !info.Foreground {

@@ -29,6 +29,9 @@ Notes:
   for long text or apps that drop synthesized keystrokes, use desk_key_type
   with paste=true (clipboard + Ctrl+V).
 - desk_mouse_scroll: dy>0 scrolls up, dy<0 scrolls down; dx>0 scrolls left.
+- desk_mouse_drag holds the button from the start point to the end point
+  (moving files, range selection, sliders); avoid instant teleport drags via
+  desk_mouse_move + desk_mouse_click, they will not start a drag session.
 - Insert desk_wait when the UI needs time to react (animations, page loads).
 
 Safety: before any irreversible action (closing windows, deleting files,

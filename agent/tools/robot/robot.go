@@ -72,6 +72,11 @@ func NewTools() ([]tool.BaseTool, error) {
 		mouseScroll); err != nil {
 		return nil, err
 	}
+	if list, err = registerTool(list, "desk_mouse_drag",
+		"Press the mouse button at a start point, smoothly drag to an end point and release (left/right/middle, default left) — for moving files/icons, range selection, sliders, resizing panes.",
+		mouseDrag); err != nil {
+		return nil, err
+	}
 	if list, err = registerTool(list, "desk_key_tap",
 		"Tap a key, optionally holding modifiers (e.g. key=\"s\" with modifiers=[\"ctrl\"] for Ctrl+S). Key names: letters, digits, F1-F12, enter, tab, esc, space, backspace, delete, up/down/left/right, home, end, pageup, pagedown.",
 		keyTap); err != nil {

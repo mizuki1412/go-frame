@@ -21,6 +21,8 @@ var (
 	procEnumWindows        = user32.NewProc("EnumWindows")
 	procSetProcessDPIAware = user32.NewProc("SetProcessDPIAware")
 	procIsWindow           = user32.NewProc("IsWindow")
+	procPrintWindow        = user32.NewProc("PrintWindow")
+	procKeybdEvent         = user32.NewProc("keybd_event")
 )
 
 // syscall.NewCallback 分配的回调槽永不释放，故包级注册一个单例回调，
