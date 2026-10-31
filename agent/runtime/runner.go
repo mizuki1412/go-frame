@@ -57,7 +57,7 @@ use them when their descriptions match the task.`
 type RunnerOptions struct {
 	// Instruction 覆盖默认系统指令（agentInstruction）；为空用默认
 	Instruction string
-	// ExtraTools 追加注册的业务侧工具（如 desk-auto 的桌面操作工具集）
+	// ExtraTools 追加注册的业务侧工具（如 robot 子包的桌面操作工具集）
 	ExtraTools []tool.BaseTool
 }
 
@@ -163,12 +163,12 @@ func NewRunnerWithOptions(cm model.ToolCallingChatModel, store adk.CheckPointSto
 	}
 	toolList = append(toolList, mcpTools...)
 
-	// 业务侧追加工具（如 desk-auto 的桌面操作工具集）
+	// 业务侧追加工具（如 robot 子包的桌面操作工具集）
 	if opts != nil && len(opts.ExtraTools) > 0 {
 		toolList = append(toolList, opts.ExtraTools...)
 	}
 
-	// 指令覆盖：业务侧（如 desk-auto）可替换默认系统指令
+	// 指令覆盖：业务侧可替换默认系统指令
 	instruction := agentInstruction
 	if opts != nil && opts.Instruction != "" {
 		instruction = opts.Instruction

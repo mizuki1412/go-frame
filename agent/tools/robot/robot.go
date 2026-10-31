@@ -1,6 +1,6 @@
 //go:build windows
 
-// Package robot desk-auto 桌面操作工具集：基于 robotgo v1.1.0 的纯 Go Windows
+// Package robot 桌面操作工具集：基于 robotgo v1.3.5 的纯 Go Windows
 // 实现（github.com/go-vgo/robotgo/win 子包，tailscale/win 系统调用，无 CGO），
 // 为 agent 提供 截图/窗口/键鼠/剪贴板 等 desk_* 工具，供 LLM 在 ReAct
 // 自循环中按用户需求调用（如"截图 firefox 当前画面"）。
@@ -32,7 +32,7 @@ func registerTool[In, Out any](list []tool.BaseTool, name, desc string,
 }
 
 // NewTools 创建全部桌面操作工具（desk_*）：窗口、截图、键鼠、剪贴板、等待。
-// 供 desk-auto 命令经 runtime.RunnerOptions.ExtraTools 注册进 agent
+// 供业务侧经 runtime.RunnerOptions.ExtraTools 注册进 agent（消费方 vflow-go）
 func NewTools() ([]tool.BaseTool, error) {
 	ensureDPIAware()
 	var list []tool.BaseTool

@@ -53,7 +53,7 @@ func run() error {
 
 // AgentLoop 交互式多轮会话循环：输入命令处理（session <id> 恢复历史会话、
 // exit/quit 退出、clear 重置、resume 断点续跑），其余输入作为一轮任务交给 runner。
-// agent 与 desk-auto（主项目 deskauto 包）共用
+// 供 agent 子命令与业务侧复用
 func AgentLoop(runner *adk.Runner, store adk.CheckPointStore) error {
 	// 按 agent.sessionDir 配置创建会话历史存储（为空则不持久化）
 	var sessStore *sessionstore.SessionStore
