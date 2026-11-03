@@ -1,6 +1,7 @@
 package user
 
 import (
+	"github.com/example/go-frame/mod/common/controller"
 	"github.com/example/go-frame/mod/user/controller/department"
 	"github.com/example/go-frame/mod/user/controller/role"
 	"github.com/example/go-frame/mod/user/controller/smscode"
@@ -18,7 +19,7 @@ func Init() {
 	tokenkit.SetLoader(service.LoadPrincipal)
 }
 
-// All 用户、部门、角色模块
+// All 用户、部门、角色、通用（文件）模块
 func All() []func(r *router.Router) {
-	return []func(r *router.Router){user.Init, role.Init, department.Init, smscode.Init}
+	return []func(r *router.Router){user.Init, role.Init, department.Init, smscode.Init, controller.Init}
 }

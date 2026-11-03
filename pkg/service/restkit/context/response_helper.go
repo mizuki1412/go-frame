@@ -12,7 +12,7 @@ import (
 )
 
 type RestRet struct {
-	Result  int    `json:"result" comment:"成功为0，授权拦截为401，错误为500"`
+	Result  int    `json:"result" comment:"成功为0，鉴权失效为401，权限不足为403，错误为500"`
 	Message string `json:"message,omitempty"`
 	Data    any    `json:"data,omitempty" comment:"数据" data:"true"`
 	Total   uint64 `json:"total,omitempty" comment:"记录总数，如果data是列表并且分页"`
@@ -20,7 +20,13 @@ type RestRet struct {
 
 const ResultErr = 500
 const ResultSuccess = 0
+
+// ResultAuthErr 登录失效：前端据此清会话跳登录页。
 const ResultAuthErr = 401
+
+// ResultPermErr 权限不足：与登录失效（401）区分开，前端据此决定跳登录页还是仅提示。
+// 业务码 403 落在 exception 约定的 300~999 透传段内，HTTP 状态同步为 403。
+const ResultPermErr = 403
 
 // TransferRestRet 用于自定义返回结构时的转换
 var TransferRestRet = func(ret RestRet) any {
@@ -35,6 +41,8 @@ func (ctx *Context) Json(ret RestRet) {
 		code = http.StatusOK
 	case ResultAuthErr:
 		code = http.StatusUnauthorized
+	case ResultPermErr:
+		code = http.StatusForbidden
 	default:
 		code = http.StatusInternalServerError
 	}

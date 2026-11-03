@@ -16,7 +16,9 @@ func Cors() router.Handler {
 		c.Proxy.Header("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH, OPTIONS")
 		// Max-Age 让浏览器缓存预检结果，避免每次跨域请求都重发 OPTIONS
 		c.Proxy.Header("Access-Control-Max-Age", "600")
-		c.Proxy.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, Authorization,Token")
+		// Expose-Headers 须含 Content-Disposition：前端 download() 靠它解析文件名，
+		// 跨域时浏览器只暴露列在白名单里的响应头
+		c.Proxy.Header("Access-Control-Expose-Headers", "Content-Length, Content-Disposition, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type, Authorization,Token")
 		c.Proxy.Header("Access-Control-Allow-Credentials", "true")
 		// 放行所有OPTIONS方法
 		if method == "OPTIONS" {

@@ -49,10 +49,11 @@ func (ctx *Context) HasDept(deptIds ...int64) bool {
 	return ctx.Principal().HasDept(deptIds...)
 }
 
-// MustPerm 无权限时直接 panic 出业务错误，由 middleware.Recover 转成错误响应。
+// MustPerm 无权限时直接 panic 出 403 业务错误（Recover 透传 result=403，
+// 与 AuthPerm 拦截器的 403 档位一致），由 middleware.Recover 转成错误响应。
 // 适合 handler 内做「前置条件不满足就不必继续」的场景。
 func (ctx *Context) MustPerm(perms ...string) {
 	if !ctx.HasPerm(perms...) {
-		panic(exception.New("无权限：" + strings.Join(perms, "|")))
+		panic(exception.NewCode(ResultPermErr, "无权限："+strings.Join(perms, "|")))
 	}
 }

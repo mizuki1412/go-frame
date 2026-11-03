@@ -143,12 +143,23 @@ func UpdateUserInfo(uid int64, params UpdateUserInfoParams) {
 type ListUsersParams struct {
 	DepartmentIds []int64
 	RoleIds       []int64
+	// PageNum/PageSize 服务端分页：PageSize<=0 时不分页，返回全量
+	PageNum  int
+	PageSize int
 }
 
-// ListUsers 管理员查看用户列表。
-func ListUsers(params ListUsersParams) []*model.User {
+// ListUsers 管理员查看用户列表，返回当页数据与总条数。
+func ListUsers(params ListUsersParams) ([]*model.User, uint64) {
+	param := userdao.ListParam{Roles: params.RoleIds, Departments: params.DepartmentIds}
+	if params.PageSize > 0 {
+		pageNum := params.PageNum
+		if pageNum <= 0 {
+			pageNum = 1
+		}
+		param.Page = &sqlkit.Page{PageSize: uint64(params.PageSize), PageNum: uint64(pageNum)}
+	}
 	dao := userdao.New(userdao.OptsDefault)
-	return dao.List(userdao.ListParam{Roles: params.RoleIds, Departments: params.DepartmentIds})
+	return dao.List(param)
 }
 
 type AddUserParams struct {
