@@ -229,6 +229,41 @@ func TestMysqlDSNQuotesParamValue(t *testing.T) {
 	}
 }
 
+// DSN 超时护栏：mysql 未显式配 timeout 时默认追加建连超时；驱动级参数（readTimeout 等）
+// 由 go-sql-driver 解析，值保持 Go 形态（duration/bool）不加 SQL 单引号；系统变量仍加引号。
+func TestMysqlDSNTimeoutParams(t *testing.T) {
+	_, dsn := getDataSourceName(DataSourceParam{
+		Driver: sqlconst.Mysql, Host: "127.0.0.1", Port: "3306", User: "u", Pwd: "p", Name: "db",
+		Params: map[string]string{
+			"readTimeout":       "30s",
+			"lock_wait_timeout": "60",
+			"sql_mode":          "STRICT_TRANS_TABLES,NO_ZERO_DATE",
+		},
+	})
+	if !strings.Contains(dsn, "&timeout=10s") {
+		t.Fatalf("未默认追加建连 timeout: %s", dsn)
+	}
+	// 驱动级参数：值 30s 原样（URL 转义后 30s，%30s 之类不应出现引号包裹）
+	if !strings.Contains(dsn, "readTimeout=30s") {
+		t.Fatalf("驱动级参数 readTimeout 被误加引号: %s", dsn)
+	}
+	// 系统变量：数字型仍走原样（isBareSQLValue），字符串型 sql_mode 需带 %27 引号
+	if !strings.Contains(dsn, "sql_mode=%27STRICT_TRANS_TABLES%2CNO_ZERO_DATE%27") {
+		t.Fatalf("系统变量 sql_mode 未按字符串加引号: %s", dsn)
+	}
+	// 显式配了 timeout 时不重复追加默认值
+	_, dsn2 := getDataSourceName(DataSourceParam{
+		Driver: sqlconst.Mysql, Host: "127.0.0.1", Port: "3306", User: "u", Pwd: "p", Name: "db",
+		Params: map[string]string{"timeout": "5m"},
+	})
+	if strings.Contains(dsn2, "&timeout=10s") {
+		t.Fatalf("显式配置 timeout 后仍追加默认值: %s", dsn2)
+	}
+	if !strings.Contains(dsn2, "timeout=5m") {
+		t.Fatalf("显式 timeout 未原样保留: %s", dsn2)
+	}
+}
+
 // EscapeName 的标识符内部定界符必须翻倍：datax 迁移时源表列名本身含反引号
 // （如 `concat(scjj.`统一社会信用代码`, now(), '330903')`），只包外层会被提前闭合，
 // 整条 SQL 报 1064 near '`'。
