@@ -111,7 +111,8 @@ INSERT INTO sys_privilege_constant (id, name, type, sort) VALUES
   ('user:admin',        '用户管理',     'user',       10),
   ('user:session',      '在线会话管理', 'user',       20),
   ('role:manage',       '角色管理',     'role',       30),
-  ('department:manage', '部门管理',     'department', 40)
+  ('department:manage', '部门管理',     'department', 40),
+  ('common:file',       '文件删除',     'common',     50)
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, sort = EXCLUDED.sort;
 
 -- ---------- 内置超级管理员角色（id=0） ----------

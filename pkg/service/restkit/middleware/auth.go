@@ -13,8 +13,9 @@ import (
 // 每个拦截器都自带登录态校验，可直接挂在 router.Group 上独立使用；
 // 也可以先用 AuthLogin 统一挡住匿名请求，再叠加更细的拦截器。
 //
-// 失败一律用 context.ResultAuthErr(401) 响应：本框架的 RestRet 只有 0/401/500 三档，
-// 权限不足与登录失效对前端而言同属「重登或联系管理员」，不再单开 403 档位。
+// 失败分两档：登录失效/域不匹配用 context.ResultAuthErr(401)，
+// 权限/角色/部门不足用 context.ResultPermErr(403)——前端据此区分
+// 「跳登录页」与「仅提示无权限」，避免缺权限用户被 401 重载逻辑带进死循环。
 
 // AuthLogin 登录态校验：token 必须能解析出未过期的服务端会话。
 // 不传 scopes 表示不校验域（兼容既有 app 端路由）。
@@ -38,7 +39,7 @@ func AuthPerm(perms ...string) router.Handler {
 			return
 		}
 		if !ctx.HasPerm(perms...) {
-			deny(ctx, "无权限："+strings.Join(perms, "|"))
+			denyPerm(ctx, "无权限："+strings.Join(perms, "|"))
 			return
 		}
 		ctx.Proxy.Next()
@@ -52,7 +53,7 @@ func AuthPermAll(perms ...string) router.Handler {
 			return
 		}
 		if !ctx.HasPermAll(perms...) {
-			deny(ctx, "权限不足："+strings.Join(perms, "|"))
+			denyPerm(ctx, "权限不足："+strings.Join(perms, "|"))
 			return
 		}
 		ctx.Proxy.Next()
@@ -66,7 +67,7 @@ func AuthRole(roleIds ...int64) router.Handler {
 			return
 		}
 		if !ctx.HasRole(roleIds...) {
-			deny(ctx, "无角色权限")
+			denyPerm(ctx, "无角色权限")
 			return
 		}
 		ctx.Proxy.Next()
@@ -82,7 +83,7 @@ func AuthDept(deptIds ...int64) router.Handler {
 			return
 		}
 		if !ctx.HasDept(deptIds...) {
-			deny(ctx, "无部门权限")
+			denyPerm(ctx, "无部门权限")
 			return
 		}
 		ctx.Proxy.Next()
@@ -107,8 +108,15 @@ func authenticate(ctx *context.Context, scopes ...string) bool {
 	return true
 }
 
-// deny 统一写 401 响应并 Abort。
+// deny 统一写 401 响应并 Abort（登录失效/域不匹配）。
 func deny(ctx *context.Context, message string) {
 	ctx.Json(context.RestRet{Result: context.ResultAuthErr, Message: message})
+	ctx.Proxy.Abort()
+}
+
+// denyPerm 写 403 响应并 Abort（权限/角色/部门不足）。
+// 与 401 分档：前端收到 403 只提示，不跳登录、不整页刷新。
+func denyPerm(ctx *context.Context, message string) {
+	ctx.Json(context.RestRet{Result: context.ResultPermErr, Message: message})
 	ctx.Proxy.Abort()
 }

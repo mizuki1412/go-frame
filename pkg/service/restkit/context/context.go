@@ -58,9 +58,21 @@ func (ctx *Context) BindForm(bean any) {
 	}
 	// rest.logRequestBody 开关（默认开）：info 级打印本次请求参数，敏感字段已掩码。
 	// 快照取自绑定过程现成的 key=value 对与原始 body 字节，不再对 bean 做反射序列化。
+	// token 只打前 8 位指纹：完整凭证落日志等于把会话交给任何能看日志的人。
 	if snapshot != "" {
-		logkit.Info("request-body", "token", ctx.GetToken(), "url", ctx.Request.URL.Path, "body", snapshot)
+		logkit.Info("request-body", "token", tokenFingerprint(ctx.GetToken()), "url", ctx.Request.URL.Path, "body", snapshot)
 	}
+}
+
+// tokenFingerprint 返回 token 前 8 位指纹，便于按请求关联日志而不泄露完整凭证。
+func tokenFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	if len(token) > 8 {
+		return token[:8] + "..."
+	}
+	return token
 }
 
 // maskValue 敏感字段值打码：key 含 pwd/password/passwd（不分大小写）即视为密码类参数

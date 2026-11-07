@@ -14,13 +14,13 @@ type listUsersParams = service.ListUsersParams
 func ListUsers(ctx *context.Context) {
 	params := listUsersParams{}
 	ctx.BindForm(&params)
-	list := service.ListUsers(params)
+	list, total := service.ListUsers(params)
 	if AdditionUserExAdminFunc != nil {
 		for _, u := range list {
 			AdditionUserExAdminFunc(ctx, u)
 		}
 	}
-	ctx.JsonSuccess(list)
+	ctx.JsonSuccessWithPage(list, total)
 }
 
 type AddUserParams = service.AddUserParams

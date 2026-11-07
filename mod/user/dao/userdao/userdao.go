@@ -135,14 +135,16 @@ type ListParam struct {
 	Page *sqlkit.Page
 }
 
-func (dao Dao) List(param ListParam) model.UserList {
+// List 按条件列出用户。分页（param.Page 非 nil 且 PageSize>0）时返回当页数据与总条数；
+// 不分页时返回全量列表，total 即列表长度。
+func (dao Dao) List(param ListParam) (model.UserList, uint64) {
 	// 角色过滤先经中间表反查 user id，再走主表 id IN 过滤（两段 SQL，无 join、无 N+1）。
 	// 反查结果为空时直接短路，避免 IN () 空集合产生全表扫描的语义歧义。
 	var roleUserIds []int64
 	if len(param.Roles) > 0 {
 		roleUserIds = userroledao.New(userroledao.OptsNone, dao.DataSource()).ListUserIdsByRoleIds(param.Roles)
 		if len(roleUserIds) == 0 {
-			return model.UserList{}
+			return model.UserList{}, 0
 		}
 	}
 	builder := dao.Select().OrderBy("name").OrderBy("id")
@@ -156,10 +158,10 @@ func (dao Dao) List(param ListParam) model.UserList {
 		builder = builder.WhereUnnestIn("department", param.Departments)
 	}
 	if param.Page != nil && param.Page.PageSize > 0 {
-		list, _ := builder.Page(*param.Page)
-		return list
+		return builder.Page(*param.Page)
 	}
-	return builder.List()
+	list := builder.List()
+	return list, uint64(len(list))
 }
 
 // FreezeUser 冻结/解冻用户，顺带刷新 updatedt。

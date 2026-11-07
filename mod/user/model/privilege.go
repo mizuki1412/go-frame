@@ -25,4 +25,6 @@ const (
 	PermRoleManage = "role:manage"
 	// PermDeptManage 部门管理。
 	PermDeptManage = "department:manage"
+	// PermCommonFile 文件删除（mod/common）。上传/列表仅需登录态。
+	PermCommonFile = "common:file"
 )

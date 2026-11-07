@@ -8,15 +8,15 @@ Go scaffold for vibe-coding REST services (gin + viper + cobra + sqlx/squirrel +
 
 ## Current state (verified)
 
-- Build, vet and tests all green (verified 2026-09-25, after the sqlkit refactor: 全链路 ctx 变体、UpsertObj、InsertBatch 分片、jsonb key 参数化、SelectEx/FromSubQuery 修复). The required verification for every change is:
-  ```
-  go build ./... && go vet ./... && gofmt -l . && go test ./...
-  ```
-  Caveat: on a Windows checkout with `core.autocrlf=true`, `gofmt -l .` lists nearly every file because files are CRLF on disk (repo stores LF). `gofmt -d` shows content-identical diffs — treat that as clean; only real formatting diffs count.
+- Build, vet and tests all green (verified 2026-11-02, after webkit-sample 前后端对齐改造: 权限不足 403 分档、userdao.List 返回 (list,total) 分页、mod/common 文件模块). The required verification for every change is:
+    ```
+    go build ./... && go vet ./... && gofmt -l . && go test ./...
+    ```
+    Caveat: on a Windows checkout with `core.autocrlf=true`, `gofmt -l .` lists nearly every file because files are CRLF on disk (repo stores LF). `gofmt -d` shows content-identical diffs — treat that as clean; only real formatting diffs count.
 - Tests: pkg infra (`pkg/class`, `pkg/library/cmdkit`, `pkg/library/cryptokit`, `pkg/library/framekit`, `pkg/service/tokenkit`, `pkg/service/sqlkit`（免 DB 的 SQL 生成单测）, …) plus `agent/runtime/sessionstore` and `pkg/cli` (bind_agent_test); no `mod/` tests, no lint config, no CI.
 - Module path `github.com/example/go-frame` and project name `go-frame` are placeholders; rename (go.mod module path + import prefixes, at minimum) before reuse.
 - Go toolchain: go 1.27.0 (go.mod `go 1.27.0`).
-- Business modules: `mod/user/`. Agent runtime lives outside `mod/` in `agent/` (infra-like, may not be imported by `mod/*`).
+- Business modules: `mod/user/`, `mod/common/`（文件上传/下载/列表/删除，存储在 project.dir 下 common/，路径校验在 service.safeRelPath）. Agent runtime lives outside `mod/` in `agent/` (infra-like, may not be imported by `mod/*`).
 
 ## Layout
 
@@ -60,14 +60,15 @@ main.go                       # cli.RootCMD(...) → user.Init()（注册权限�
 - Config file: `config.yaml` in working dir, override with `-c/--config`.
 - Env placeholders: after `ReadInConfig`, `loadConfig` expands `${ENV_NAME}` in string config values to `os.Getenv(ENV_NAME)`; unset vars expand to empty string (2026-09-19, VERSION 20260919).
 - Key families (each in its own `configkey/*.go`): rest/db/token/redis/... plus the agent stack:
-  - `token.*`: expire（会话绝对上限/小时，默认 168）、idle（空闲窗口/小时，默认 1，`<=0` 退化为不滑动）、multiLogin（是否多端在线，默认 true）。token 不透明、无签名密钥，**没有 `token.secret` 这一类密钥配置**。
-  - `llm.*`: baseUrl, apiKey, model, maxTokens, apiType (`openai-chat-completions` 默认 / `anthropic-messages`).
-  - `agent.*`: skillsDir, stream, maxIterations, checkpointDir, workspaceDir, sessionDir — 全部留空安全降级（不启用对应能力）.
-  - `ragflow.*`: baseUrl, apiKey, datasetIds（前两者 + datasetIds 配齐才注册 rag_search 工具）+ 检索参数（knnTopK/similarityThreshold/…）.
+    - `token.*`: expire（会话绝对上限/小时，默认 168）、idle（空闲窗口/小时，默认 1，`<=0` 退化为不滑动）、multiLogin（是否多端在线，默认 true）。token 不透明、无签名密钥，**没有 `token.secret` 这一类密钥配置**。
+    - `llm.*`: baseUrl, apiKey, model, maxTokens, apiType (`openai-chat-completions` 默认 / `anthropic-messages`).
+    - `agent.*`: skillsDir, stream, maxIterations, checkpointDir, workspaceDir, sessionDir — 全部留空安全降级（不启用对应能力）.
+    - `ragflow.*`: baseUrl, apiKey, datasetIds（前两者 + datasetIds 配齐才注册 rag_search 工具）+ 检索参数（knnTopK/similarityThreshold/…）.
 
 ## Conventions
 
 ### Layer boundaries
+
 ```
 controller: ctx.BindForm(&params) → call service → ctx.JsonSuccess(ret)
 service:    business logic, TxArea, cross-dao assembly, panic(exception.New("...")) on error
@@ -79,16 +80,16 @@ model:      struct tags: db, json, pk, table, auto, logicDel, comment, default, 
 
 ### Naming
 
-| Element | Rule | Example |
-|---|---|---|
-| Module dir | `mod/<singular_lower>/` | `mod/user/` |
-| Resource dir | `dao/<resource>dao/`, `controller/<resource>/` | `dao/userdao/`, `controller/user/` |
-| DAO struct | `type Dao struct { sqlkit.Dao[model.User] }` | embedded |
-| DAO New | `userdao.New(opts CascadeOpts, ds ...*sqlkit.DataSource) Dao` | |
-| Service | `package service`, function-style (no struct) | `func Login(username, phone, pwd string)` |
-| Controller handler | `func Xxx(ctx *context.Context)` | `LoginByUsername`, `ListUsers` |
-| Init | `func Init(router *router.Router)` — one per resource sub-package | in `index.go` |
-| Route prefix | `/<resource>` or `/<resource>/admin` | `/user`, `/user/admin` |
+| Element            | Rule                                                              | Example                                   |
+| ------------------ | ----------------------------------------------------------------- | ----------------------------------------- |
+| Module dir         | `mod/<singular_lower>/`                                           | `mod/user/`                               |
+| Resource dir       | `dao/<resource>dao/`, `controller/<resource>/`                    | `dao/userdao/`, `controller/user/`        |
+| DAO struct         | `type Dao struct { sqlkit.Dao[model.User] }`                      | embedded                                  |
+| DAO New            | `userdao.New(opts CascadeOpts, ds ...*sqlkit.DataSource) Dao`     |                                           |
+| Service            | `package service`, function-style (no struct)                     | `func Login(username, phone, pwd string)` |
+| Controller handler | `func Xxx(ctx *context.Context)`                                  | `LoginByUsername`, `ListUsers`            |
+| Init               | `func Init(router *router.Router)` — one per resource sub-package | in `index.go`                             |
+| Route prefix       | `/<resource>` or `/<resource>/admin`                              | `/user`, `/user/admin`                    |
 
 ### DAO cascade
 
@@ -97,6 +98,7 @@ type CascadeOpts struct { Role bool; Department bool }
 var OptsDefault = CascadeOpts{Role: true, Department: true}
 // New registers cascades via dao.WithCascadeOpts(opts, func(obj *T, ctx sqlkit.CascadeCtx) { ... })
 ```
+
 Batch strategy with `WithCascadeBatchLinks` to avoid N+1. No byte enums.
 
 ### sqlkit 数据访问 (pkg/service/sqlkit)
@@ -121,9 +123,10 @@ router.Group("/user/login").Post("", Login).Api(
     openapi.Security(nil),  // nil = no auth required
 )
 ```
+
 - Mandatory: `Tag`, `Summary`.
 - Guard with `middleware.AuthLogin()` / `AuthPerm()` / `AuthPermAll()` / `AuthRole()` / `AuthDept()`; open endpoints get `openapi.Security(nil)`.
-- 鉴权失败与权限不足统一用 `context.ResultAuthErr`(401) 响应——本框架 RestRet 只有 0/401/500 三档，不单开 403。
+- 鉴权失败分两档：**登录失效/域不匹配用 `context.ResultAuthErr`(401)**（`middleware.deny`），**权限/角色/部门不足用 `context.ResultPermErr`(403)**（`middleware.denyPerm`、`ctx.MustPerm` panic 也带 403 业务码）。前端（webkit-sample）对 401 清会话跳登录页、对 403 仅提示——新增拦截器时保持这个分档，勿把权限不足打回 401（会触发前端跳登录死循环）。
 - `main.go` 必须先调 `user.Init()`（注册 tokenkit 权限数据源）再 `restkit.AddActions(...)`；未注册时鉴权 **fail closed**，管理员接口对所有人关闭。
 
 ### Auth stack (pkg/service/tokenkit)
@@ -132,11 +135,11 @@ token 为**不透明随机串**（crypto/rand 32 字节 hex），不含载荷，
 
 存储布局（逻辑 key，redis 后端自动加 `redis.prefix`；未配置 `redis.host` 时退回进程内内存，仅限单机开发与单测）：
 
-| key | 类型 | 内容 |
-|---|---|---|
-| `tk:t:<token>` | STRING | 会话 JSON，TTL = `token.idle` |
-| `tk:u:<uid>` | SET | 该用户在线的 token 集合 |
-| `tk:online` | ZSET | 全局在线索引，member=token，score=最后活跃时间（毫秒） |
+| key            | 类型   | 内容                                                   |
+| -------------- | ------ | ------------------------------------------------------ |
+| `tk:t:<token>` | STRING | 会话 JSON，TTL = `token.idle`                          |
+| `tk:u:<uid>`   | SET    | 该用户在线的 token 集合                                |
+| `tk:online`    | ZSET   | 全局在线索引，member=token，score=最后活跃时间（毫秒） |
 
 - 两道独立过期闸门：`token.idle` 管「多久没动」（鉴权滑动续期；会话记录写入按「距上次落库超空闲窗口一半」节流，在线索引 score 每次鉴权都更新），`token.expire` 管「总共能活多久」（以 `LoginTime` 为基准，**续期无法延长**）。`token.multiLogin=false` 时新登录顶掉该用户全部旧会话。
 - 公开 API：`Create/Parse/Refresh/Destroy/DestroyByUser/ListByUser/OnlineCount/ListOnline/ListOnlineOf/LastActive`。`Refresh` 返回 `(*Session, bool)`（鉴权中间件据此免二次解析）；**LastActive 的实时权威在 `tk:online` 的 score**，展示类读取（`LastActive/ListOnline/ListOnlineOf`）一律取 score，会话记录里的字段允许 idle/2 滞后。
@@ -149,13 +152,17 @@ token 为**不透明随机串**（crypto/rand 32 字节 hex），不含载荷，
 - `ListOnline` 会先按空闲窗口批量清理在线索引的僵尸成员再分页；页内逐条回读会话记录，**单页 limit 建议 ≤200**。
 
 ### Response format
+
 ```json
-{"result": 0, "message": "", "data": {}, "total": 0}
+{ "result": 0, "message": "", "data": {}, "total": 0 }
 ```
-- 0 = success, 401 = auth failure, 500 = business error (from `panic(exception.New(...))`, caught by `middleware.Recover`).
-- `ctx.JsonSuccess(data...)`, `ctx.JsonSuccessWithPage(data, total)`, `ctx.JsonError(msg)`.
+
+- 0 = success, 401 = 登录失效, 403 = 权限不足（HTTP 状态同步 403）, 500 = business error (from `panic(exception.New(...))`, caught by `middleware.Recover`; `exception.NewCode(code, ...)` 的 300~999 业务码随 result 透传).
+- `ctx.JsonSuccess(data...)`, `ctx.JsonSuccessWithPage(data, total)`, `ctx.JsonError(msg)`, `ctx.JsonErrorCode(code, msg)`.
+- 列表分页约定：dao 层 `List(param)` 返回 `(list, total)`（分页时 total 为 count 结果，不分页为 len）；service 层接 `PageNum/PageSize`（`PageSize<=0` 不分页）；controller 用 `JsonSuccessWithPage`。前端配套 `parsePage`（webkit-sample `lib/utils/page.js`）把 `{data,total}` 映射为 kit-pagination-page 的 `{data,currentPage,total,totalPage}`。
 
 ### Sensitive fields / security
+
 - `Pwd` and similar must be `json:"-"`.
 - Passwords use bcrypt (`cryptokit.HashPwd`/`CheckPwd`); legacy MD5 hashes are lazily upgraded to bcrypt on successful login (`cryptokit.NeedUpgrade`). Never write new MD5 password code.
 - Never hardcode secrets/connection strings.

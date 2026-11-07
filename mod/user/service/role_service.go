@@ -103,8 +103,9 @@ func ListRolesWithUser(params ListRolesWithUserParams) []*model.Role {
 	udao := userdao.New(userdao.OptsDefault)
 	for _, r := range list {
 		r.EnsurePrivileges()
+		users, _ := udao.List(userdao.ListParam{Roles: []int64{r.Id}}) // B12: r.Id 而非 params.RoleId
 		r.Extend.PutAll(map[string]any{
-			"users": udao.List(userdao.ListParam{Roles: []int64{r.Id}}), // B12: r.Id 而非 params.RoleId
+			"users": users,
 		})
 	}
 	return list
