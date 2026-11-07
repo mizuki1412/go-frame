@@ -53,3 +53,23 @@ func TestHashPwdSaltRandom(t *testing.T) {
 		t.Errorf("两个哈希都应校验通过")
 	}
 }
+
+func TestPwdError(t *testing.T) {
+	cases := []struct {
+		pwd  string
+		want string
+	}{
+		{"Abc@1234", ""},           // 四类齐全
+		{"", "请输入密码"},              // 空密码
+		{"Ab1密码密码", "密码至少 8 位"},    // 7 个字符、15 字节：按字符数而非字节数判定
+		{"abc@12345", "密码需包含大写字母"}, // 缺大写
+		{"ABC@12345", "密码需包含小写字母"}, // 缺小写
+		{"Abcd@efgh", "密码需包含数字"},   // 缺数字
+		{"Abcdefg12", "密码需包含特殊字符"}, // 缺特殊符号
+	}
+	for _, c := range cases {
+		if got := PwdError(c.pwd); got != c.want {
+			t.Errorf("PwdError(%q) = %q, want %q", c.pwd, got, c.want)
+		}
+	}
+}

@@ -217,6 +217,20 @@ func ExternalDocs(description, url string) BuildOpt {
 	}
 }
 
+// PayloadEncrypted 标记当前 operation 报文经 RSA+AES 混合加密（文档说明用）：
+// 请求需携带 X-Enc-Key 头（RSA 加密的 AES 密钥），加密体信封 {"body":"<base64>"}；
+// 挂 EncryptResponse 时响应同样加密并带 X-Enc-Payload 响应头。
+func PayloadEncrypted() BuildOpt {
+	return func(b *Builder) {
+		note := "报文加密接口：请求需携带 X-Enc-Key 头（RSA 加密的 AES 密钥），请求体为 {\"body\":\"<加密信封>\"}"
+		if b.Path.Description != "" {
+			b.Path.Description += "\n" + note
+		} else {
+			b.Path.Description = note
+		}
+	}
+}
+
 // ==================== Request ====================
 
 // ReqParam 声明查询/路径/头/cookie 参数。

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/example/go-frame/pkg/class/exception"
 	"golang.org/x/crypto/bcrypt"
@@ -39,6 +40,44 @@ func CheckPwd(pwd, stored string) bool {
 // NeedUpgrade 存量哈希是否仍是 MD5、需要升级为 bcrypt。
 func NeedUpgrade(stored string) bool {
 	return !strings.HasPrefix(stored, "$2")
+}
+
+// PwdError 密码强度规则：字符数至少 8 位（按字符而非字节计，多字节字符不占便宜），
+// 且大写字母、小写字母、数字、特殊符号四类字符全含。返回空串表示通过。
+// 非 ASCII 字符（含中文）一律计入特殊符号，与前端 [^A-Za-z0-9] 口径一致。
+func PwdError(p string) string {
+	if p == "" {
+		return "请输入密码"
+	}
+	if utf8.RuneCountInString(p) < 8 {
+		return "密码至少 8 位"
+	}
+	var hasLower, hasUpper, hasDigit, hasSpecial bool
+	for _, c := range p {
+		switch {
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+	if !hasLower {
+		return "密码需包含小写字母"
+	}
+	if !hasUpper {
+		return "密码需包含大写字母"
+	}
+	if !hasDigit {
+		return "密码需包含数字"
+	}
+	if !hasSpecial {
+		return "密码需包含特殊字符"
+	}
+	return ""
 }
 
 // URLEncode 这里是base64的，中文url用url.QueryEscape

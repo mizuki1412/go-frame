@@ -161,6 +161,12 @@ token 为**不透明随机串**（crypto/rand 32 字节 hex），不含载荷，
 - Never hardcode secrets/connection strings.
 - Delete operations must nullify unique fields (phone, username) to avoid dirty data.
 
+### Payload encryption (RSA+AES 报文加密)
+- Primitives in `cryptokit/rsa_aes.go`: `GenerateRSAKeyPair` / `RSADecrypt`（OAEP-SHA256 优先、回退 PKCS1v15，兼容 jsencrypt 与 WebCrypto 两类前端）/ `RSAEncrypt` / `AuthAESEncrypt|Decrypt`（AES-256-CBC+HMAC-SHA256 encrypt-then-MAC，密钥材料 64B = AESKey(32)+MACKey(32)）。
+- Middleware `restkit/middleware/payload_crypto.go`：`DecryptRequest()`（解密请求体重写 `Request.Body`，`BindForm` 无感知）、`EncryptResponse()`（缓冲响应体加密回 `{"body":...}` + `X-Enc-Payload` 头；panic 时回落明文错误信封）。挂载即强制，缺 `X-Enc-Key` 头直接拒绝；两者同挂共用同一把密钥。不适用于 SSE/文件下载。
+- `restkit.EnablePayloadCrypto(path ...string)` 注册公钥端点（默认 `GET /payload/publicKey`），须在 `Run()` 前调用一次。
+- 私钥配置 `crypto.rsaPrivateKey`（PKCS#8 PEM，支持 `${ENV}`）；留空自动生成临时密钥并告警——多实例部署必须配置统一私钥。协议：`X-Enc-Key = base64(RSA(base64(64B密钥材料)))`（内层 base64 因 jsencrypt 仅支持 ASCII 入参；WebCrypto 裸 64B 亦兼容）；加密信封 `{"body":"base64(IV(16)||AES-CBC-PKCS7(明文)||HMAC-SHA256(32))"}`。
+
 ## Agent runtime (agent/)
 
 eino ADK (`github.com/cloudwego/eino/adk`) based ReAct agent, exposed as `go-frame agent` REPL 子命令（cmd/agent.go）。
