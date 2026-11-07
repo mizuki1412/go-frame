@@ -2,21 +2,23 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	einomcp "github.com/cloudwego/eino-ext/components/tool/mcp"
+	"github.com/bytedance/sonic"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/eino-contrib/jsonschema"
 	"github.com/example/go-frame/pkg/class/exception"
 	"github.com/example/go-frame/pkg/cli/configkey"
 	"github.com/example/go-frame/pkg/service/configkit"
 	"github.com/example/go-frame/pkg/service/logkit"
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/v2/client"
+	"github.com/mark3labs/mcp-go/v2/mcp"
 )
 
 // mcp.* 服务器配置字段（mcp.servers 下每个服务器的子键）
@@ -167,15 +169,89 @@ func connectMCPServer(ctx context.Context, name string, cfg map[string]any) ([]t
 		return nil, nil, exception.New("初始化 MCP 连接失败: " + err.Error())
 	}
 
-	tools, err := einomcp.GetTools(ctx, &einomcp.Config{
-		Cli:          cli,
-		ToolNameList: mList(cfg, mcpFieldTools),
-	})
+	tools, err := listMCPAdapterTools(ctx, cli, mList(cfg, mcpFieldTools))
 	if err != nil {
 		_ = cli.Close()
-		return nil, nil, exception.New("获取 MCP 工具列表失败: " + err.Error())
+		return nil, nil, err
 	}
 	return tools, cli, nil
+}
+
+// listMCPAdapterTools 把 MCP server 的工具列表包装为 eino 工具，替代
+// eino-ext/components/tool/mcp 的 GetTools（该组件 v0.0.9 依赖 mcp-go v1 模块路径，
+// 无法接收 v2 客户端，故按其同构逻辑对 v2 直接适配）。nameFilter 非空时只保留名单内工具。
+func listMCPAdapterTools(ctx context.Context, cli *client.Client, nameFilter []string) ([]tool.BaseTool, error) {
+	list, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		return nil, exception.New("获取 MCP 工具列表失败: " + err.Error())
+	}
+	nameSet := make(map[string]struct{}, len(nameFilter))
+	for _, n := range nameFilter {
+		nameSet[n] = struct{}{}
+	}
+	out := make([]tool.BaseTool, 0, len(list.Tools))
+	for _, t := range list.Tools {
+		if len(nameFilter) > 0 {
+			if _, ok := nameSet[t.Name]; !ok {
+				continue
+			}
+		}
+		// mcp.Tool.InputSchema 经 JSON 往返转为 eino-contrib/jsonschema.Schema
+		raw, err := sonic.Marshal(t.InputSchema)
+		if err != nil {
+			return nil, exception.New("序列化 MCP 工具参数 schema 失败: " + err.Error())
+		}
+		js := &jsonschema.Schema{}
+		if err := sonic.Unmarshal(raw, js); err != nil {
+			return nil, exception.New("解析 MCP 工具参数 schema 失败: " + err.Error())
+		}
+		out = append(out, &mcpToolAdapter{
+			cli: cli,
+			info: &schema.ToolInfo{
+				Name:        t.Name,
+				Desc:        t.Description,
+				ParamsOneOf: schema.NewParamsOneOfByJSONSchema(js),
+			},
+		})
+	}
+	return out, nil
+}
+
+// mcpToolAdapter 单个 MCP 工具的 eino 适配（替代 eino-ext/components/tool/mcp 的 toolHelper）。
+// name 为 server 侧原始名，改名/超时由 prefixedMCPTool 叠加。
+type mcpToolAdapter struct {
+	cli  *client.Client
+	info *schema.ToolInfo
+}
+
+func (m *mcpToolAdapter) Info(_ context.Context) (*schema.ToolInfo, error) {
+	return m.info, nil
+}
+
+// InvokableRun 调用 server 侧工具：结果整体序列化为 JSON 文本返回（与 eino-ext 行为一致），
+// IsError 结果转为错误（由 runner 的工具报错软化兜底为工具结果文本）
+func (m *mcpToolAdapter) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+	if argumentsInJSON == "" {
+		argumentsInJSON = "{}"
+	}
+	result, err := m.cli.CallTool(ctx, mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params: mcp.CallToolParams{
+			Name:      m.info.Name,
+			Arguments: json.RawMessage(argumentsInJSON),
+		},
+	})
+	if err != nil {
+		return "", exception.New("调用 MCP 工具失败: " + err.Error())
+	}
+	out, err := sonic.MarshalString(result)
+	if err != nil {
+		return "", exception.New("序列化 MCP 工具结果失败: " + err.Error())
+	}
+	if result.IsError {
+		return "", exception.New("MCP 工具返回错误: " + out)
+	}
+	return out, nil
 }
 
 // mcpInitializeRequest 构造 MCP initialize 握手请求
